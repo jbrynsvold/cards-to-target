@@ -43,7 +43,7 @@ EXCL = (
     ' -"card lot" -"cards lot" -"pack of" -"box of" -"blaster" -"hobby box"'
     ' -"factory sealed" -"sealed box" -"sealed pack" -"complete set"'
     ' -"mystery" -"random" -"bundle" -"collection" -"bulk"'
-    ' -PSA -BGS -SGC -CGC -graded -autograph -auto'
+    ' -autograph -auto'
 )
 
 CATEGORIES = {
@@ -51,6 +51,7 @@ CATEGORIES = {
         "sport":         "NFL",
         "ebay_query":    f"football {EXCL}",
         "ebay_category": "261328",   # Sports Trading Card Singles
+        "aspect_filter": "categoryId:261328,Sport:{Football},Graded:{No}",
         "discord_emoji": "🏈",
         "color":         0x013369,
     },
@@ -58,6 +59,7 @@ CATEGORIES = {
         "sport":         "NBA",
         "ebay_query":    f"basketball {EXCL}",
         "ebay_category": "261328",
+        "aspect_filter": "categoryId:261328,Sport:{Basketball},Graded:{No}",
         "discord_emoji": "🏀",
         "color":         0xC9082A,
     },
@@ -65,6 +67,7 @@ CATEGORIES = {
         "sport":         "MLB",
         "ebay_query":    f"baseball {EXCL}",
         "ebay_category": "261328",
+        "aspect_filter": "categoryId:261328,Sport:{Baseball},Graded:{No}",
         "discord_emoji": "⚾",
         "color":         0x002D72,
     },
@@ -72,6 +75,7 @@ CATEGORIES = {
         "sport":         "NHL",
         "ebay_query":    f"hockey {EXCL}",
         "ebay_category": "261328",
+        "aspect_filter": "categoryId:261328,Sport:{Ice Hockey},Graded:{No}",
         "discord_emoji": "🏒",
         "color":         0x000000,
     },
@@ -79,6 +83,7 @@ CATEGORIES = {
         "sport":         "Pokemon",
         "ebay_query":    EXCL,
         "ebay_category": "183454",   # Pokemon Cards
+        "aspect_filter": "categoryId:183454,Graded:{No}",
         "discord_emoji": "⚡",
         "color":         0xFFCC00,
     },
@@ -185,6 +190,9 @@ def search_ebay(category_config: dict, listing_type: str) -> list:
             now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
             params["filter"] = f"buyingOptions:{{AUCTION}},price:[15..],conditionIds:{{1000|2750}},itemEndDate:[{now}..{six_hours}]"
 
+        if category_config.get("aspect_filter"):
+            params["aspect_filter"] = category_config["aspect_filter"]
+
         time.sleep(1)
         resp = requests.get(
             EBAY_SEARCH_URL,
@@ -193,7 +201,7 @@ def search_ebay(category_config: dict, listing_type: str) -> list:
         )
 
         if not resp.ok:
-            log.error(f"eBay error: {resp.status_code} {resp.text[:1000]}")
+            log.error(f"eBay error: {resp.status_code} {resp.text[:200]}")
             break
 
         batch = resp.json().get("itemSummaries", [])
@@ -491,13 +499,13 @@ def process_items(items: list, listing_type: str, cards: list,
                 no_card += 1
                 continue
 
-        log.info(f"CARD MATCH: \"{title}\" -> {matched_canonical}")
-
         # Step 5: get eBay price
         if listing_type == "bin":
             price = float(item.get("price", {}).get("value", 0))
         else:
             price = float(item.get("price", {}).get("value", 0))
+
+        log.info(f"CARD MATCH: \"{title}\" -> {matched_canonical} | eBay: ${price:.2f} | raw median: ${matched_card['raw_price']:.2f}")
 
         if price <= 0:
             continue
