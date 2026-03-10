@@ -317,12 +317,19 @@ def parse_grade(title: str) -> str:
         "PSA|BGS|SGC|CGC|CSG|HGA|GAI|GMA|KSA|WCG|BVG|CCG|CGA|CCA|OCE|"
         "PGS|OCG|AGS|TAG|ISA|BCCG|GAS|PTA|DGA|AFA|MNT|GEM MINT"
     )
-    match = re.search(rf'\b({GRADERS})\s*(\d+\.?\d*)', title.upper())
+    t = title.upper()
+    match = re.search(rf'\b({GRADERS})\s*(\d+\.?\d*)', t)
     if match:
         return f"{match.group(1)} {match.group(2)}"
-    # Also catch "Beckett X" and "Beckett NM" style grades
-    if re.search(r'\bBECKETT\b', title.upper()):
+    # Catch "Beckett" style grades
+    if re.search(r'\bBECKETT\b', t):
         return "Beckett"
+    # Catch "Gem Mint 10", "Gem Mt 10", "GEM MT 10", "GEM 10" variants
+    if re.search(r'\bGEM\s*(MINT|MT)?\s*\d+', t):
+        return "Graded"
+    # Catch standalone numeric grades that imply graded: "9.5 MINT", "10 MINT"
+    if re.search(r'\b(9\.5|10)\s*(MINT|GEM)\b', t):
+        return "Graded"
     return "Raw"
 
 def clean_title(title: str) -> str:
@@ -486,7 +493,10 @@ def process_items(items: list, listing_type: str, cards: list,
             ).strip()
 
             # Score: how well does the eBay title match the set name?
-            set_score = fuzz.token_set_ratio(title_lower, set_core)
+            # Use partial_ratio to require set name words to actually appear
+            set_score_set   = fuzz.token_set_ratio(title_lower, set_core)
+            set_score_sort  = fuzz.token_sort_ratio(title_lower, set_core)
+            set_score       = (set_score_set * 0.4) + (set_score_sort * 0.6)
 
             # Bonus points for variation match (if not base card)
             variation_score = 0
