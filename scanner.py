@@ -48,6 +48,9 @@ EXCL = (
     ' -"card lot" -"pack of" -"box of" -"blaster" -"hobby box"'
     ' -"factory sealed" -"sealed box" -"sealed pack" -"complete set"'
     ' -"mystery" -"random" -"bundle" -"collection" -"bulk"'
+    ' -"pick a card" -"pick your card" -"you choose" -"choose from"'
+    ' -"art card" -"fan art" -"custom card" -"custom slab" -"custom art"'
+    ' -"uncut" -"panels" -"stamp card" -"holographic"'
     ' -PSA -BGS -SGC -CGC -graded -autograph -auto'
     ' -cards'
 )
