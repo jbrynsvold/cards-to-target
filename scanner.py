@@ -358,6 +358,12 @@ def process_items(items: list, listing_type: str, cards: list,
     # Build canonical_name list for card-level fuzzy matching
     canonical_names = [c["canonical_name"] for c in cards if c.get("canonical_name")]
 
+    # Debug: show sample player names and eBay titles
+    sample_players = list({c["player_name"] for c in cards if c.get("player_name")})[:10]
+    log.info(f"  Sample DB players: {sample_players}")
+    raw_titles = [item.get("title","") for item in items if parse_grade(item.get("title","")) == "Raw"]
+    log.info(f"  Sample raw eBay titles: {raw_titles[:5]}")
+
     skipped_graded = 0
     no_candidates  = 0
     no_player      = 0
