@@ -192,12 +192,12 @@ def search_ebay(category_config: dict, listing_type: str) -> list:
             params["aspect_filter"] = category_config["aspect_filter"]
 
         if listing_type == "bin":
-            params["filter"] = "buyingOptions:{FIXED_PRICE},price:[10..],conditionIds:{4000|400010|400011|400012|400013}"
+            params["filter"] = "buyingOptions:{FIXED_PRICE},price:[10..],conditionIds:{4000}"
         else:
             from datetime import timezone, timedelta
             six_hours = (datetime.now(timezone.utc) + timedelta(hours=6)).strftime("%Y-%m-%dT%H:%M:%SZ")
             now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-            params["filter"] = f"buyingOptions:{{AUCTION}},price:[10..],conditionIds:{{4000|400010|400011|400012|400013}},itemEndDate:[{now}..{six_hours}]"
+            params["filter"] = f"buyingOptions:{{AUCTION}},price:[10..],conditionIds:{{4000}},itemEndDate:[{now}..{six_hours}]"
 
         time.sleep(1)
         resp = requests.get(
