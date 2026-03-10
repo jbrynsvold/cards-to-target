@@ -49,33 +49,33 @@ EXCL = (
 CATEGORIES = {
     "NFL": {
         "sport":          "NFL",
-        "ebay_query":     f"football {EXCL}",
+        "ebay_query":     EXCL,
         "ebay_category":  "261328",   # Sports Trading Card Singles
-        "aspect_filter":  "categoryId:261328,Sport:{Football}",
+        "sport_aspect":   "Football",
         "discord_emoji":  "🏈",
         "color":          0x013369,
     },
     "NBA": {
         "sport":          "NBA",
-        "ebay_query":     f"basketball {EXCL}",
+        "ebay_query":     EXCL,
         "ebay_category":  "261328",   # Sports Trading Card Singles
-        "aspect_filter":  "categoryId:261328,Sport:{Basketball}",
+        "sport_aspect":   "Basketball",
         "discord_emoji":  "🏀",
         "color":          0xC9082A,
     },
     "MLB": {
         "sport":          "MLB",
-        "ebay_query":     f"baseball {EXCL}",
+        "ebay_query":     EXCL,
         "ebay_category":  "261328",   # Sports Trading Card Singles
-        "aspect_filter":  "categoryId:261328,Sport:{Baseball}",
+        "sport_aspect":   "Baseball",
         "discord_emoji":  "⚾",
         "color":          0x002D72,
     },
     "NHL": {
         "sport":          "NHL",
-        "ebay_query":     f"hockey {EXCL}",
+        "ebay_query":     EXCL,
         "ebay_category":  "261328",   # Sports Trading Card Singles
-        "aspect_filter":  "categoryId:261328,Sport:{Ice Hockey}",
+        "sport_aspect":   "Ice Hockey",
         "discord_emoji":  "🏒",
         "color":          0x000000,
     },
@@ -83,7 +83,7 @@ CATEGORIES = {
         "sport":          "Pokemon",
         "ebay_query":     EXCL,
         "ebay_category":  "183454",   # Pokemon Cards
-        "aspect_filter":  None,
+        "sport_aspect":   None,
         "discord_emoji":  "⚡",
         "color":          0xFFCC00,
     },
@@ -169,45 +169,76 @@ def get_ebay_token() -> str:
 # ===========================================================================
 
 def search_ebay(category_config: dict, listing_type: str) -> list:
-    """Search eBay for raw cards. listing_type: 'bin' or 'auction'"""
-    token = get_ebay_token()
+    """Search eBay using Finding API (findItemsAdvanced). listing_type: 'bin' or 'auction'"""
     items = []
+    app_id = EBAY_CLIENT_ID  # Finding API uses App ID directly, no OAuth needed
 
-    for page in range(2):  # max 2 pages = 200 listings per type
+    for page in range(1, 3):  # pages 1 and 2 = up to 200 results
         params = {
-            "q":            category_config["ebay_query"],
-            "category_ids": category_config["ebay_category"],
-            "limit":        "100",
-            "offset":       str(page * 100),
-            "sort":         "-newlyListed" if listing_type == "bin" else "-endingSoonest",
+            "OPERATION-NAME":        "findItemsAdvanced",
+            "SERVICE-VERSION":       "1.0.0",
+            "SECURITY-APPNAME":      app_id,
+            "RESPONSE-DATA-FORMAT":  "JSON",
+            "REST-PAYLOAD":          "",
+            "keywords":              category_config["ebay_query"],
+            "categoryId":            category_config["ebay_category"],
+            "paginationInput.entriesPerPage": "100",
+            "paginationInput.pageNumber":     str(page),
+            "itemFilter(0).name":    "ListingType",
+            "itemFilter(0).value":   "FixedPrice" if listing_type == "bin" else "Auction",
+            "itemFilter(1).name":    "MinPrice",
+            "itemFilter(1).value":   "15",
+            "itemFilter(1).paramName":  "Currency",
+            "itemFilter(1).paramValue": "USD",
+            "itemFilter(2).name":    "Condition",
+            "itemFilter(2).value(0)": "1000",  # New
+            "itemFilter(2).value(1)": "1500",  # New other
+            "itemFilter(2).value(2)": "2000",  # Manufacturer refurbished — drop, but keep Near Mint
+            "sortOrder":             "StartTimeNewest" if listing_type == "bin" else "EndTimeSoonest",
         }
 
-        # conditionIds: 1000=New, 2750=Like New only — anything worse won't grade well
-        if listing_type == "bin":
-            params["filter"] = "buyingOptions:{FIXED_PRICE},price:[10..],conditionIds:{1000|2750}"
-        else:
-            from datetime import timezone
-            six_hours = datetime.now(timezone.utc).replace(microsecond=0)
-            from datetime import timedelta
-            six_hours = (datetime.now(timezone.utc) + timedelta(hours=6)).strftime("%Y-%m-%dT%H:%M:%SZ")
-            params["filter"] = f"buyingOptions:{{AUCTION}},price:[10..],conditionIds:{{1000|2750}},itemEndDate:[..{six_hours}]"
+        # Sport aspect filter
+        sport_val = category_config.get("sport_aspect")
+        if sport_val:
+            params["aspectFilter(0).aspectName"]     = "Sport"
+            params["aspectFilter(0).aspectValueName"] = sport_val
 
-        if category_config.get("aspect_filter"):
-            params["aspect_filter"] = category_config["aspect_filter"]
+        # Auction: only ending within 6 hours
+        if listing_type == "auction":
+            from datetime import timezone, timedelta
+            six_hours = (datetime.now(timezone.utc) + timedelta(hours=6)).strftime("%Y-%m-%dT%H:%M:%S.000Z")
+            params["itemFilter(3).name"]  = "EndTimeFrom"
+            params["itemFilter(3).value"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000Z")
+            params["itemFilter(4).name"]  = "EndTimeTo"
+            params["itemFilter(4).value"] = six_hours
 
-        resp = requests.get(
-            EBAY_SEARCH_URL,
-            headers={"Authorization": f"Bearer {token}", "Accept": "application/json"},
-            params=params,
-        )
+        resp = requests.get(EBAY_SEARCH_URL, params=params)
 
         if not resp.ok:
             log.error(f"eBay error: {resp.status_code} {resp.text[:200]}")
             break
 
-        batch = resp.json().get("itemSummaries", [])
-        items.extend(batch)
-        log.info(f"  Fetched {len(batch)} {listing_type} items (page {page+1})")
+        try:
+            root = resp.json()["findItemsAdvancedResponse"][0]
+            batch = root.get("searchResult", [{}])[0].get("item", [])
+        except (KeyError, IndexError, ValueError) as e:
+            log.error(f"eBay parse error: {e} — {resp.text[:300]}")
+            break
+
+        # Normalize to same shape as before: title, itemId, viewItemURL, sellingStatus
+        normalized = []
+        for it in batch:
+            try:
+                normalized.append({
+                    "title":      it["title"][0],
+                    "itemId":     it["itemId"][0],
+                    "url":        it["viewItemURL"][0],
+                    "price":      float(it["sellingStatus"][0]["currentPrice"][0]["__value__"]),
+                })
+            except (KeyError, IndexError, ValueError):
+                continue
+        items.extend(normalized)
+        log.info(f"  Fetched {len(normalized)} {listing_type} items (page {page})")
         if len(batch) < 100:
             break
 
@@ -347,7 +378,7 @@ def post_discord_alert(card: dict, item: dict, listing_type: str,
     embed = {
         "title":       f"{emoji} Grading Opportunity — {card['canonical_name']}{rookie_tag}",
         "description": description,
-        "url":         item.get("itemWebUrl", ""),
+        "url":         item.get("url", ""),
         "color":       category_config["color"],
         "fields": [
             {"name": "Set",          "value": f"{card['set_year']} {card['set_name']}", "inline": True},
@@ -504,10 +535,9 @@ def process_items(items: list, listing_type: str, cards: list,
 
         # Step 5: get eBay price
         if listing_type == "bin":
-            price = float(item.get("price", {}).get("value", 0))
+            price = float(item.get("price", 0))
         else:
-            price = float(item.get("currentBidPrice", {}).get("value", 0) or
-                         item.get("price", {}).get("value", 0))
+            price = float(item.get("price", 0))
 
         if price <= 0:
             continue
@@ -531,7 +561,7 @@ def process_items(items: list, listing_type: str, cards: list,
             continue
 
         # Step 8: skip if already alerted
-        url = item.get("itemWebUrl", "")
+        url = item.get("url", "")
         if has_alerted(url):
             continue
 
