@@ -55,6 +55,17 @@ EXCL = (
     ' -cards'
 )
 
+# Python-side exclusion filter — mirrors EXCL query string (eBay doesn't guarantee exclusions)
+EXCL_KEYWORDS = [
+    "you pick", "lot of", "choose your", "complete your set", "u pick",
+    "card lot", "pack of", "box of", "blaster", "hobby box",
+    "factory sealed", "sealed box", "sealed pack", "complete set",
+    "mystery", "random", "bundle", "collection", "bulk",
+    "pick a card", "pick your card", "you choose", "choose from",
+    "art card", "fan art", "custom card", "custom slab", "custom art",
+    "uncut", "panels", "stamp card", "holographic",
+]
+
 CATEGORIES = {
     "NFL": {
         "sport":         "NFL",
@@ -96,6 +107,7 @@ CATEGORIES = {
         "discord_emoji": "⚡",
         "color":         0xFFCC00,
         "is_tcg":        True,
+        "min_year":      2010,
     },
     "Yu-Gi-Oh": {
         "sport":         "Yu-Gi-Oh",
@@ -105,6 +117,7 @@ CATEGORIES = {
         "discord_emoji": "🃏",
         "color":         0x6A0DAD,
         "is_tcg":        True,
+        "min_year":      2010,
     },
 }
 
@@ -205,12 +218,12 @@ def search_ebay(category_config: dict, listing_type: str) -> list:
             params["aspect_filter"] = category_config["aspect_filter"]
 
         if listing_type == "bin":
-            params["filter"] = "buyingOptions:{FIXED_PRICE},price:[10..],conditionIds:{4000}"
+            params["filter"] = "buyingOptions:{FIXED_PRICE},price:[10..],conditionIds:{3000|4000}"
         else:
             from datetime import timezone, timedelta
             six_hours = (datetime.now(timezone.utc) + timedelta(hours=6)).strftime("%Y-%m-%dT%H:%M:%SZ")
             now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-            params["filter"] = f"buyingOptions:{{AUCTION}},price:[10..],conditionIds:{{4000}},itemEndDate:[{now}..{six_hours}]"
+            params["filter"] = f"buyingOptions:{{AUCTION}},price:[10..],conditionIds:{{3000|4000}},itemEndDate:[{now}..{six_hours}]"
 
         time.sleep(1)
         resp = requests.get(
@@ -237,10 +250,11 @@ def search_ebay(category_config: dict, listing_type: str) -> list:
 
 _card_cache = {}  # sport -> list of card dicts
 
-def load_gradeable_cards(sport: str) -> list:
+def load_gradeable_cards(sport: str, min_year: int = None) -> list:
     """Load cards with grading_score >= MIN_GRADING_SCORE for a given sport."""
-    if sport in _card_cache:
-        return _card_cache[sport]
+    cache_key = f"{sport}:{min_year}"
+    if cache_key in _card_cache:
+        return _card_cache[cache_key]
 
     log.info(f"Loading gradeable cards for {sport}...")
     all_cards = []
@@ -277,13 +291,15 @@ def load_gradeable_cards(sport: str) -> list:
             psa10 = float(c["psa10_price"])
             roi   = psa10 / (raw + GRADING_COST)
             net   = psa10 - raw - GRADING_COST
+            if min_year and c.get("set_year") and int(c["set_year"]) < min_year:
+                continue
             if roi >= MIN_ROI_MULTIPLE and roi <= MAX_ROI_MULTIPLE and net >= MIN_NET_PROFIT:
                 filtered.append(c)
         except (TypeError, ValueError, ZeroDivisionError):
             continue
     log.info(f"  Loaded {len(all_cards)} cards, {len(filtered)} passed ROI filter for {sport}")
-    _card_cache[sport] = filtered
-    return all_cards
+    _card_cache[cache_key] = filtered
+    return filtered
 
 # ===========================================================================
 # Player name matching
@@ -445,6 +461,12 @@ def process_items(items: list, listing_type: str, cards: list,
             skipped_graded += 1
             continue
 
+        # Python-side exclusion filter (eBay doesn't guarantee negative keywords)
+        title_lower_excl = title.lower()
+        if any(kw in title_lower_excl for kw in EXCL_KEYWORDS):
+            no_candidates += 1
+            continue
+
         # Pre-filter: skip vague titles
         title_words = [w for w in re.split(r'\W+', title) if len(w) >= 4]
         if len(title_words) < 2:
@@ -603,7 +625,7 @@ def run_scan():
 
         try:
             # Load gradeable cards for this sport
-            cards = load_gradeable_cards(cat_config["sport"])
+            cards = load_gradeable_cards(cat_config["sport"], min_year=cat_config.get("min_year"))
             if not cards:
                 log.info(f"No gradeable cards found for {cat_name}, skipping")
                 continue
