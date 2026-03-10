@@ -44,39 +44,39 @@ CATEGORIES = {
     "NFL": {
         "sport":          "NFL",
         "ebay_query":     f"football {EXCL}",
-        "ebay_category":  "261328",
-        "aspect_filter":  "categoryId:261328,Sport:{Football}",
+        "ebay_category":  "212",      # Sports Trading Cards
+        "aspect_filter":  "categoryId:212,Sport:{Football}",
         "discord_emoji":  "🏈",
         "color":          0x013369,
     },
     "NBA": {
         "sport":          "NBA",
         "ebay_query":     f"basketball {EXCL}",
-        "ebay_category":  "214",
-        "aspect_filter":  "categoryId:214,Sport:{Basketball}",
+        "ebay_category":  "212",      # Sports Trading Cards
+        "aspect_filter":  "categoryId:212,Sport:{Basketball}",
         "discord_emoji":  "🏀",
         "color":          0xC9082A,
     },
     "MLB": {
         "sport":          "MLB",
         "ebay_query":     f"baseball {EXCL}",
-        "ebay_category":  "261328",
-        "aspect_filter":  "categoryId:261328,Sport:{Baseball}",
+        "ebay_category":  "212",      # Sports Trading Cards
+        "aspect_filter":  "categoryId:212,Sport:{Baseball}",
         "discord_emoji":  "⚾",
         "color":          0x002D72,
     },
     "NHL": {
         "sport":          "NHL",
         "ebay_query":     f"hockey {EXCL}",
-        "ebay_category":  "261328",
-        "aspect_filter":  "categoryId:261328,Sport:{Hockey}",
+        "ebay_category":  "212",      # Sports Trading Cards
+        "aspect_filter":  "categoryId:212,Sport:{Ice Hockey}",
         "discord_emoji":  "🏒",
         "color":          0x000000,
     },
     "Pokemon": {
         "sport":          "Pokemon",
-        "ebay_query":     f'pokemon -{EXCL.replace("-autograph -auto", "").strip()}',
-        "ebay_category":  "183454",
+        "ebay_query":     EXCL,
+        "ebay_category":  "183454",   # Pokemon Cards
         "aspect_filter":  None,
         "discord_emoji":  "⚡",
         "color":          0xFFCC00,
@@ -180,7 +180,11 @@ def search_ebay(category_config: dict, listing_type: str) -> list:
         if listing_type == "bin":
             params["filter"] = "buyingOptions:{FIXED_PRICE},price:[10..],conditionIds:{1000|2750}"
         else:
-            params["filter"] = "buyingOptions:{AUCTION},price:[10..],conditionIds:{1000|2750}"
+            from datetime import timezone
+            six_hours = datetime.now(timezone.utc).replace(microsecond=0)
+            from datetime import timedelta
+            six_hours = (datetime.now(timezone.utc) + timedelta(hours=6)).strftime("%Y-%m-%dT%H:%M:%SZ")
+            params["filter"] = f"buyingOptions:{{AUCTION}},price:[10..],conditionIds:{{1000|2750}},itemEndDate:[..{six_hours}]"
 
         if category_config.get("aspect_filter"):
             params["aspect_filter"] = category_config["aspect_filter"]
@@ -283,10 +287,17 @@ def get_candidate_players(title: str, index: dict) -> list:
 
 def parse_grade(title: str) -> str:
     """Return grader+grade if present, else 'Raw'."""
-    import re
-    match = re.search(r'\b(PSA|BGS|SGC|CGC|CSG|HGA)\s*(\d+\.?\d*)', title.upper())
+    # All known grading companies including obscure ones
+    GRADERS = (
+        "PSA|BGS|SGC|CGC|CSG|HGA|GAI|GMA|KSA|WCG|BVG|CCG|CGA|CCA|"
+        "PGS|OCG|AGS|TAG|ISA|BCCG|GAS|PTA|DGA|AFA|MNT|GEM MINT"
+    )
+    match = re.search(rf'\b({GRADERS})\s*(\d+\.?\d*)', title.upper())
     if match:
         return f"{match.group(1)} {match.group(2)}"
+    # Also catch "Beckett X" and "Beckett NM" style grades
+    if re.search(r'\bBECKETT\b', title.upper()):
+        return "Beckett"
     return "Raw"
 
 def clean_title(title: str) -> str:
