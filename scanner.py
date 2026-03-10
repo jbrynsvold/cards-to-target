@@ -37,10 +37,13 @@ MIN_GRADING_SCORE = 70
 MIN_PROFIT = 50
 
 # eBay search config per category
+EXCL = '-"you pick" -"lot of" -"choose your" -"complete your set" -"u pick" -PSA -BGS -SGC -CGC -graded -autograph -auto'
+EXCL_TCG = '-"you pick" -"lot of" -"choose your" -"complete your set" -"u pick" -PSA -BGS -SGC -CGC -graded'
+
 CATEGORIES = {
     "NFL": {
         "sport":          "NFL",
-        "ebay_query":     'football card raw -"you pick" -"lot of" -"choose your" -"complete your set" -"u pick" -PSA -BGS -SGC -CGC -graded',
+        "ebay_query":     EXCL,
         "ebay_category":  "261328",
         "aspect_filter":  "categoryId:261328,Sport:{Football}",
         "discord_emoji":  "🏈",
@@ -48,7 +51,7 @@ CATEGORIES = {
     },
     "NBA": {
         "sport":          "NBA",
-        "ebay_query":     'basketball card raw -"you pick" -"lot of" -"choose your" -"complete your set" -"u pick" -PSA -BGS -SGC -CGC -graded',
+        "ebay_query":     EXCL,
         "ebay_category":  "214",
         "aspect_filter":  "categoryId:214,Sport:{Basketball}",
         "discord_emoji":  "🏀",
@@ -56,7 +59,7 @@ CATEGORIES = {
     },
     "MLB": {
         "sport":          "MLB",
-        "ebay_query":     'baseball card raw -"you pick" -"lot of" -"choose your" -"complete your set" -"u pick" -PSA -BGS -SGC -CGC -graded',
+        "ebay_query":     EXCL,
         "ebay_category":  "261328",
         "aspect_filter":  "categoryId:261328,Sport:{Baseball}",
         "discord_emoji":  "⚾",
@@ -64,7 +67,7 @@ CATEGORIES = {
     },
     "NHL": {
         "sport":          "NHL",
-        "ebay_query":     'hockey card raw -"you pick" -"lot of" -"choose your" -"complete your set" -"u pick" -PSA -BGS -SGC -CGC -graded',
+        "ebay_query":     EXCL,
         "ebay_category":  "261328",
         "aspect_filter":  "categoryId:261328,Sport:{Hockey}",
         "discord_emoji":  "🏒",
@@ -72,7 +75,7 @@ CATEGORIES = {
     },
     "Pokemon": {
         "sport":          "Pokemon",
-        "ebay_query":     'pokemon card raw ungraded -"you pick" -"lot of" -"choose your" -"complete your set" -"u pick" -PSA -BGS -SGC -CGC -graded',
+        "ebay_query":     EXCL_TCG,
         "ebay_category":  "183454",
         "aspect_filter":  None,
         "discord_emoji":  "⚡",
@@ -173,10 +176,11 @@ def search_ebay(category_config: dict, listing_type: str) -> list:
             "sort":         "-newlyListed" if listing_type == "bin" else "-endingSoonest",
         }
 
+        # conditionIds: 1000=New, 2750=Like New only — anything worse won't grade well
         if listing_type == "bin":
-            params["filter"] = "buyingOptions:{FIXED_PRICE},price:[10..]"
+            params["filter"] = "buyingOptions:{FIXED_PRICE},price:[10..],conditionIds:{1000|2750}"
         else:
-            params["filter"] = "buyingOptions:{AUCTION},price:[10..]"
+            params["filter"] = "buyingOptions:{AUCTION},price:[10..],conditionIds:{1000|2750}"
 
         if category_config.get("aspect_filter"):
             params["aspect_filter"] = category_config["aspect_filter"]
@@ -240,34 +244,38 @@ def load_gradeable_cards(sport: str) -> list:
     return all_cards
 
 # ===========================================================================
-# Player name index for fast candidate lookup
+# Player name matching
 # ===========================================================================
 
+SUFFIX_RE = re.compile(r'\b(II|III|IV|Jr\.?|Sr\.?)$', re.IGNORECASE)
+
+def strip_suffix(name: str) -> str:
+    return SUFFIX_RE.sub('', name).strip()
+
 def build_player_index(cards: list) -> dict:
-    """Build word -> [player_names] index for fast candidate lookup."""
+    """Build cleaned_name -> original_name lookup for partial_ratio matching."""
     index = {}
+    seen = set()
     for card in cards:
         name = card.get("player_name", "")
-        if not name:
+        if not name or name in seen:
             continue
-        words = name.lower().split()
-        for word in words:
-            if len(word) >= 3:
-                if word not in index:
-                    index[word] = set()
-                index[word].add(name)
+        seen.add(name)
+        cleaned = strip_suffix(name).lower()
+        index[cleaned] = name
     return index
 
 def get_candidate_players(title: str, index: dict) -> list:
-    words = title.lower().split()
-    seen = set()
-    candidates = []
-    for word in words:
-        for name in index.get(word, []):
-            if name not in seen:
-                seen.add(name)
-                candidates.append(name)
-    return candidates
+    """Find players whose name appears in the eBay title using partial_ratio."""
+    title_lower = title.lower()
+    matches = []
+    for cleaned_name, original_name in index.items():
+        score = fuzz.partial_ratio(cleaned_name, title_lower)
+        if score >= 90:
+            matches.append((original_name, score))
+    # Return sorted by score descending, deduplicated
+    matches.sort(key=lambda x: -x[1])
+    return [m[0] for m in matches]
 
 # ===========================================================================
 # Title parsing helpers
@@ -387,18 +395,8 @@ def process_items(items: list, listing_type: str, cards: list,
             no_candidates += 1
             continue
 
-        # Step 2: fuzzy match title to player name
-        player_match = fuzz_process.extractOne(
-            title.lower(),
-            candidates,
-            scorer=fuzz.token_set_ratio,
-            score_cutoff=75,
-        )
-        if not player_match:
-            no_player += 1
-            continue
-
-        matched_player = player_match[0]
+        # Step 2: use best candidate (already scored by partial_ratio in get_candidate_players)
+        matched_player = candidates[0]
 
         # Step 3: get cards for this player
         player_cards = [c for c in cards if c.get("player_name") == matched_player]
