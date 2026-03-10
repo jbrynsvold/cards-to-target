@@ -414,7 +414,7 @@ def process_items(items: list, listing_type: str, cards: list,
             clean_title(title.lower()),
             player_canonicals,
             scorer=fuzz.token_set_ratio,
-            score_cutoff=60,
+            score_cutoff=70,
         )
         if not card_match:
             no_card += 1
@@ -425,6 +425,57 @@ def process_items(items: list, listing_type: str, cards: list,
         if not matched_card:
             no_card += 1
             continue
+
+        # Strict validation: extract identifiers from eBay title
+        # If none found → too vague to trust, skip
+        # If found → must match DB card exactly
+        ebay_year_match  = re.search(r'\b(19|20)\d{2}\b', title)
+        ebay_card_match  = re.search(r'#\s*(\w+)', title)
+        ebay_year        = int(ebay_year_match.group()) if ebay_year_match else None
+        ebay_card_num    = ebay_card_match.group(1).lstrip('0') if ebay_card_match else None
+
+        set_year         = int(matched_card["set_year"]) if matched_card.get("set_year") else None
+        db_card_num      = str(matched_card.get("card_number") or "").lstrip('0')
+
+        # If no year AND no card number found in title → skip (too vague)
+        if not ebay_year and not ebay_card_num:
+            log.info(f"  VAGUE SKIP: no year or card# in title — \"{title}\"")
+            no_card += 1
+            continue
+
+        # Year must match exactly if present
+        if ebay_year and set_year and ebay_year != set_year:
+            log.info(f"  YEAR SKIP: eBay {ebay_year} != DB {set_year} — \"{title}\"")
+            no_card += 1
+            continue
+
+        # Card number must match exactly if present in both
+        if ebay_card_num and db_card_num and ebay_card_num != db_card_num:
+            log.info(f"  CARD# SKIP: eBay #{ebay_card_num} != DB #{db_card_num} — \"{title}\"")
+            no_card += 1
+            continue
+
+        # Set name validation: extract known brand/set keywords from eBay title
+        # At least one must appear in the matched canonical name
+        SET_KEYWORDS = [
+            "prizm", "chrome", "topps", "bowman", "donruss", "optic", "mosaic",
+            "select", "contenders", "score", "fleer", "upper deck", "skybox",
+            "stadium club", "finest", "heritage", "archives", "series",
+            "hoops", "panini", "sp authentic", "exquisite", "immaculate",
+            "national treasures", "phoenix", "obsidian", "spectra", "revolution",
+            "absolute", "certified", "playbook", "prestige", "legacy",
+            "base set", "jungle", "fossil", "team rocket", "gym", "neo",
+            "ex", "diamond", "legend", "platinum",
+        ]
+        title_lower_set = title.lower()
+        canonical_lower = matched_canonical.lower()
+        title_set_keywords = [kw for kw in SET_KEYWORDS if kw in title_lower_set]
+
+        if title_set_keywords:
+            if not any(kw in canonical_lower for kw in title_set_keywords):
+                log.info(f"  SET SKIP: title keywords {title_set_keywords} not in \"{matched_canonical}\"")
+                no_card += 1
+                continue
 
         log.info(f"CARD MATCH: \"{title}\" -> {matched_canonical}")
 
