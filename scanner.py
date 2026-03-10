@@ -45,17 +45,19 @@ MIN_PROFIT = 50
 # eBay search config per category
 EXCL = (
     '-"you pick" -"lot of" -"choose your" -"complete your set" -"u pick"'
-    ' -"card lot" -"cards lot" -"pack of" -"box of" -"blaster" -"hobby box"'
+    ' -"card lot" -"pack of" -"box of" -"blaster" -"hobby box"'
     ' -"factory sealed" -"sealed box" -"sealed pack" -"complete set"'
     ' -"mystery" -"random" -"bundle" -"collection" -"bulk"'
     ' -PSA -BGS -SGC -CGC -graded -autograph -auto'
+    ' -cards'
 )
 
 CATEGORIES = {
     "NFL": {
         "sport":         "NFL",
         "ebay_query":    f"football {EXCL}",
-        "ebay_category": "261328",   # Sports Trading Card Singles
+        "ebay_category": "261328",
+        "aspect_filter": "categoryId:261328,Sport:{Football},Graded:{No}",
         "discord_emoji": "🏈",
         "color":         0x013369,
     },
@@ -63,6 +65,7 @@ CATEGORIES = {
         "sport":         "NBA",
         "ebay_query":    f"basketball {EXCL}",
         "ebay_category": "261328",
+        "aspect_filter": "categoryId:261328,Sport:{Basketball},Graded:{No}",
         "discord_emoji": "🏀",
         "color":         0xC9082A,
     },
@@ -70,6 +73,7 @@ CATEGORIES = {
         "sport":         "MLB",
         "ebay_query":    f"baseball {EXCL}",
         "ebay_category": "261328",
+        "aspect_filter": "categoryId:261328,Sport:{Baseball},Graded:{No}",
         "discord_emoji": "⚾",
         "color":         0x002D72,
     },
@@ -77,13 +81,15 @@ CATEGORIES = {
         "sport":         "NHL",
         "ebay_query":    f"hockey {EXCL}",
         "ebay_category": "261328",
+        "aspect_filter": "categoryId:261328,Sport:{Ice Hockey},Graded:{No}",
         "discord_emoji": "🏒",
         "color":         0x000000,
     },
     "Pokemon": {
         "sport":         "Pokemon",
         "ebay_query":    EXCL,
-        "ebay_category": "183454",   # Pokemon Cards
+        "ebay_category": "183454",
+        "aspect_filter": "categoryId:183454,Graded:{No}",
         "discord_emoji": "⚡",
         "color":         0xFFCC00,
     },
@@ -181,6 +187,9 @@ def search_ebay(category_config: dict, listing_type: str) -> list:
             "offset":       str(page * 100),
             "sort":         "-newlyListed" if listing_type == "bin" else "endingSoonest",
         }
+
+        if category_config.get("aspect_filter"):
+            params["aspect_filter"] = category_config["aspect_filter"]
 
         if listing_type == "bin":
             params["filter"] = "buyingOptions:{FIXED_PRICE},price:[10..],conditionIds:{1000|2750}"
@@ -493,7 +502,7 @@ def process_items(items: list, listing_type: str, cards: list,
                 best_score   = total_score
                 matched_card = card
 
-        if not matched_card or best_score < 60:
+        if not matched_card or best_score < 75:
             no_card += 1
             continue
 
