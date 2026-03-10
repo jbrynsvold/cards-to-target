@@ -95,6 +95,16 @@ CATEGORIES = {
         "aspect_filter": "categoryId:183454,Graded:{No}",
         "discord_emoji": "⚡",
         "color":         0xFFCC00,
+        "is_tcg":        True,
+    },
+    "Yu-Gi-Oh": {
+        "sport":         "Yu-Gi-Oh",
+        "ebay_query":    f"yugioh {EXCL}",
+        "ebay_category": "183454",
+        "aspect_filter": "categoryId:183454,Graded:{No}",
+        "discord_emoji": "🃏",
+        "color":         0x6A0DAD,
+        "is_tcg":        True,
     },
 }
 
@@ -447,8 +457,9 @@ def process_items(items: list, listing_type: str, cards: list,
         ebay_year       = int(ebay_year_match.group()) if ebay_year_match else None
         ebay_card_num   = ebay_card_match.group(1).lstrip('0') if ebay_card_match else None
 
-        # Must have year OR card# to be trustworthy
-        if not ebay_year and not ebay_card_num:
+        # Must have year OR card# to be trustworthy (skip for TCGs — set names identify cards)
+        is_tcg = category_config.get("is_tcg", False)
+        if not is_tcg and not ebay_year and not ebay_card_num:
             log.info(f"  VAGUE SKIP: no year or card# in title — \"{title}\"")
             no_candidates += 1
             continue
