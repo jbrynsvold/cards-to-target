@@ -39,12 +39,11 @@ MIN_PROFIT = 50
 
 # eBay search config per category
 EXCL = '-"you pick" -"lot of" -"choose your" -"complete your set" -"u pick" -PSA -BGS -SGC -CGC -graded -autograph -auto'
-EXCL_TCG = '-"you pick" -"lot of" -"choose your" -"complete your set" -"u pick" -PSA -BGS -SGC -CGC -graded'
 
 CATEGORIES = {
     "NFL": {
         "sport":          "NFL",
-        "ebay_query":     EXCL,
+        "ebay_query":     f"football {EXCL}",
         "ebay_category":  "261328",
         "aspect_filter":  "categoryId:261328,Sport:{Football}",
         "discord_emoji":  "🏈",
@@ -52,7 +51,7 @@ CATEGORIES = {
     },
     "NBA": {
         "sport":          "NBA",
-        "ebay_query":     EXCL,
+        "ebay_query":     f"basketball {EXCL}",
         "ebay_category":  "214",
         "aspect_filter":  "categoryId:214,Sport:{Basketball}",
         "discord_emoji":  "🏀",
@@ -60,7 +59,7 @@ CATEGORIES = {
     },
     "MLB": {
         "sport":          "MLB",
-        "ebay_query":     EXCL,
+        "ebay_query":     f"baseball {EXCL}",
         "ebay_category":  "261328",
         "aspect_filter":  "categoryId:261328,Sport:{Baseball}",
         "discord_emoji":  "⚾",
@@ -68,7 +67,7 @@ CATEGORIES = {
     },
     "NHL": {
         "sport":          "NHL",
-        "ebay_query":     EXCL,
+        "ebay_query":     f"hockey {EXCL}",
         "ebay_category":  "261328",
         "aspect_filter":  "categoryId:261328,Sport:{Hockey}",
         "discord_emoji":  "🏒",
@@ -76,7 +75,7 @@ CATEGORIES = {
     },
     "Pokemon": {
         "sport":          "Pokemon",
-        "ebay_query":     EXCL_TCG,
+        "ebay_query":     f'pokemon -{EXCL.replace("-autograph -auto", "").strip()}',
         "ebay_category":  "183454",
         "aspect_filter":  None,
         "discord_emoji":  "⚡",
@@ -415,7 +414,7 @@ def process_items(items: list, listing_type: str, cards: list,
             clean_title(title.lower()),
             player_canonicals,
             scorer=fuzz.token_set_ratio,
-            score_cutoff=75,
+            score_cutoff=60,
         )
         if not card_match:
             no_card += 1
