@@ -281,7 +281,7 @@ def get_candidate_players(title: str, index: dict) -> list:
     matches = []
     for cleaned_name, original_name in index.items():
         score = fuzz.partial_ratio(cleaned_name, title_lower)
-        if score >= 90:
+        if score >= 92:
             matches.append((original_name, score))
     # Return sorted by score descending, deduplicated
     matches.sort(key=lambda x: -x[1])
@@ -404,6 +404,12 @@ def process_items(items: list, listing_type: str, cards: list,
         # Skip graded listings
         if parse_grade(title) != "Raw":
             skipped_graded += 1
+            continue
+
+        # Pre-filter: skip vague titles with no meaningful words (< 3 words or all short words)
+        title_words = [w for w in re.split(r'\W+', title) if len(w) >= 4]
+        if len(title_words) < 2:
+            no_candidates += 1
             continue
 
         # Step 1: find candidate players from title words
