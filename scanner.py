@@ -452,10 +452,20 @@ def process_items(items: list, listing_type: str, cards: list,
             continue
 
         # Extract year and card# from title upfront — used throughout
-        ebay_year_match = re.search(r'\b(19|20)\d{2}\b', title)
         ebay_card_match = re.search(r'#\s*(\w+)', title)
-        ebay_year       = int(ebay_year_match.group()) if ebay_year_match else None
         ebay_card_num   = ebay_card_match.group(1).lstrip('0') if ebay_card_match else None
+        # Handle full year (2025) or short YY-YY format (25-26, 19-20)
+        full_year_match = re.search(r'\b(19|20)\d{2}\b', title)
+        ebay_year, ebay_year2 = None, None
+        if full_year_match:
+            ebay_year = int(full_year_match.group())
+        else:
+            short_match = re.search(r'\b(\d{2})-(\d{2})\b', title)
+            if short_match:
+                y1, y2 = int(short_match.group(1)), int(short_match.group(2))
+                if (y1 >= 90 or y1 <= 26) and (y2 >= 90 or y2 <= 26):
+                    ebay_year  = (1900 if y1 >= 90 else 2000) + y1
+                    ebay_year2 = 2000 + y2
 
         # Must have year OR card# to be trustworthy (skip for TCGs — set names identify cards)
         is_tcg = category_config.get("is_tcg", False)
@@ -491,9 +501,10 @@ def process_items(items: list, listing_type: str, cards: list,
             variation   = (card.get("variation") or "").lower()
             is_base     = variation in ("", "base", "none")
 
-            # Year must match if present in title
-            if ebay_year and set_year and ebay_year != set_year:
-                continue
+            # Year must match if present in title (accept either year in YY-YY range)
+            if set_year and (ebay_year or ebay_year2):
+                if ebay_year != set_year and ebay_year2 != set_year:
+                    continue
 
             # Card# must match if present in both
             if ebay_card_num and db_card_num and ebay_card_num != db_card_num:
