@@ -358,6 +358,13 @@ def process_items(items: list, listing_type: str, cards: list,
     # Build canonical_name list for card-level fuzzy matching
     canonical_names = [c["canonical_name"] for c in cards if c.get("canonical_name")]
 
+    skipped_graded = 0
+    no_candidates  = 0
+    no_player      = 0
+    no_card        = 0
+    price_too_high = 0
+    low_profit     = 0
+
     for item in items:
         title = item.get("title", "")
         if not title:
@@ -365,11 +372,13 @@ def process_items(items: list, listing_type: str, cards: list,
 
         # Skip graded listings
         if parse_grade(title) != "Raw":
+            skipped_graded += 1
             continue
 
         # Step 1: find candidate players from title words
         candidates = get_candidate_players(title, player_index)
         if not candidates:
+            no_candidates += 1
             continue
 
         # Step 2: fuzzy match title to player name
@@ -380,6 +389,7 @@ def process_items(items: list, listing_type: str, cards: list,
             score_cutoff=75,
         )
         if not player_match:
+            no_player += 1
             continue
 
         matched_player = player_match[0]
@@ -387,11 +397,13 @@ def process_items(items: list, listing_type: str, cards: list,
         # Step 3: get cards for this player
         player_cards = [c for c in cards if c.get("player_name") == matched_player]
         if not player_cards:
+            no_player += 1
             continue
 
         # Step 4: fuzzy match to specific card canonical name
         player_canonicals = [c["canonical_name"] for c in player_cards if c.get("canonical_name")]
         if not player_canonicals:
+            no_card += 1
             continue
 
         card_match = fuzz_process.extractOne(
@@ -401,12 +413,16 @@ def process_items(items: list, listing_type: str, cards: list,
             score_cutoff=75,
         )
         if not card_match:
+            no_card += 1
             continue
 
         matched_canonical = card_match[0]
         matched_card = next((c for c in player_cards if c["canonical_name"] == matched_canonical), None)
         if not matched_card:
+            no_card += 1
             continue
+
+        log.info(f"CARD MATCH: \"{title}\" -> {matched_canonical}")
 
         # Step 5: get eBay price
         if listing_type == "bin":
@@ -424,12 +440,16 @@ def process_items(items: list, listing_type: str, cards: list,
 
         # Step 6: check price threshold (within 5% of DB median)
         if price > raw_median * PRICE_THRESHOLD:
+            price_too_high += 1
+            log.info(f"  PRICE SKIP: eBay ${price:.2f} > threshold ${raw_median * PRICE_THRESHOLD:.2f} (median ${raw_median:.2f})")
             continue
 
         # Step 7: check minimum profit
         psa10 = float(matched_card.get("psa10_price") or 0)
         net_profit = psa10 - price - 27.99
         if net_profit < MIN_PROFIT:
+            low_profit += 1
+            log.info(f"  PROFIT SKIP: net profit ${net_profit:.2f} < min ${MIN_PROFIT}")
             continue
 
         # Step 8: skip if already alerted
@@ -444,7 +464,7 @@ def process_items(items: list, listing_type: str, cards: list,
         alerts_sent += 1
         time.sleep(0.5)  # small delay between Discord posts
 
-    log.info(f"  Sent {alerts_sent} alerts for {listing_type}")
+    log.info(f"  Sent {alerts_sent} alerts for {listing_type} | graded={skipped_graded} no_candidates={no_candidates} no_player={no_player} no_card={no_card} price_high={price_too_high} low_profit={low_profit}")
 
 # ===========================================================================
 # Main scan job
