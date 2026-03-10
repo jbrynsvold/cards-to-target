@@ -29,7 +29,7 @@ EBAY_SCOPE = "https://api.ebay.com/oauth/api_scope"
 
 # Price threshold: alert if eBay listing <= raw_price * this multiplier
 # 1.05 = within 5% above DB median raw price
-PRICE_THRESHOLD = 1.05
+PRICE_THRESHOLD = 1.50
 
 # Minimum grading score to consider
 MIN_GRADING_SCORE = 70
