@@ -24,7 +24,7 @@ SUPABASE_KEY       = os.getenv("SUPABASE_KEY")
 DISCORD_WEBHOOK    = os.getenv("DISCORD_WEBHOOK_GRADE_ALERTS")
 
 EBAY_TOKEN_URL = "https://api.ebay.com/identity/v1/oauth2/token"
-EBAY_SEARCH_URL = "https://api.ebay.com/buy/browse/v1/item_summary/search"
+EBAY_SEARCH_URL = "https://svcs.ebay.com/services/search/FindingService/v1"
 EBAY_SCOPE = "https://api.ebay.com/oauth/api_scope"
 
 # Price threshold: alert if eBay listing <= raw_price * this multiplier
@@ -171,7 +171,7 @@ def get_ebay_token() -> str:
 def search_ebay(category_config: dict, listing_type: str) -> list:
     """Search eBay using Finding API (findItemsAdvanced). listing_type: 'bin' or 'auction'"""
     items = []
-    app_id = EBAY_CLIENT_ID  # Finding API uses App ID directly, no OAuth needed
+    app_id = EBAY_CLIENT_ID  # Finding API uses App ID directly — no OAuth needed
 
     for page in range(1, 3):  # pages 1 and 2 = up to 200 results
         params = {
@@ -212,7 +212,7 @@ def search_ebay(category_config: dict, listing_type: str) -> list:
             params["itemFilter(4).name"]  = "EndTimeTo"
             params["itemFilter(4).value"] = six_hours
 
-        resp = requests.get(EBAY_SEARCH_URL, params=params)
+        resp = requests.get(EBAY_SEARCH_URL, params=params, timeout=15)
 
         if not resp.ok:
             log.error(f"eBay error: {resp.status_code} {resp.text[:200]}")
