@@ -212,6 +212,7 @@ def search_ebay(category_config: dict, listing_type: str) -> list:
             params["itemFilter(4).name"]  = "EndTimeTo"
             params["itemFilter(4).value"] = six_hours
 
+        time.sleep(2)  # respect Finding API rate limits
         resp = requests.get(EBAY_SEARCH_URL, params=params, timeout=15)
 
         if not resp.ok:
@@ -588,6 +589,7 @@ def run_scan():
 
     for cat_name, cat_config in CATEGORIES.items():
         log.info(f"\n--- Scanning {cat_name} ---")
+        time.sleep(5)  # pause between sports
 
         try:
             # Load gradeable cards for this sport
