@@ -29,10 +29,15 @@ EBAY_SCOPE = "https://api.ebay.com/oauth/api_scope"
 
 # Price threshold: alert if eBay listing <= raw_price * this multiplier
 # 1.05 = within 5% above DB median raw price
-PRICE_THRESHOLD = 1.50
+PRICE_THRESHOLD = 1.05
 
-# Minimum grading score to consider
-MIN_GRADING_SCORE = 70
+# ROI-based card inclusion filters (replaces grading_score cutoff)
+MIN_ROI_MULTIPLE  = 2.5   # psa10 / (raw + grading_cost) must be >= this
+MAX_ROI_MULTIPLE  = 500   # cap outliers with bad data
+MIN_NET_PROFIT    = 20    # psa10 - raw - grading_cost must be >= this
+MIN_RAW_SALES_30D = 5     # minimum raw sales in last 30 days
+MIN_PSA10_SALES   = 2     # psa10 must have sold at least this many times
+GRADING_COST      = 28    # assumed grading cost per card
 
 # Minimum PSA 10 profit after grading to alert
 MIN_PROFIT = 50
@@ -43,7 +48,7 @@ EXCL = (
     ' -"card lot" -"cards lot" -"pack of" -"box of" -"blaster" -"hobby box"'
     ' -"factory sealed" -"sealed box" -"sealed pack" -"complete set"'
     ' -"mystery" -"random" -"bundle" -"collection" -"bulk"'
-    ' -autograph -auto'
+    ' -PSA -BGS -SGC -CGC -graded -autograph -auto'
 )
 
 CATEGORIES = {
@@ -51,7 +56,6 @@ CATEGORIES = {
         "sport":         "NFL",
         "ebay_query":    f"football {EXCL}",
         "ebay_category": "261328",   # Sports Trading Card Singles
-        "aspect_filter": "categoryId:261328,Sport:{Football},Graded:{No}",
         "discord_emoji": "🏈",
         "color":         0x013369,
     },
@@ -59,7 +63,6 @@ CATEGORIES = {
         "sport":         "NBA",
         "ebay_query":    f"basketball {EXCL}",
         "ebay_category": "261328",
-        "aspect_filter": "categoryId:261328,Sport:{Basketball},Graded:{No}",
         "discord_emoji": "🏀",
         "color":         0xC9082A,
     },
@@ -67,7 +70,6 @@ CATEGORIES = {
         "sport":         "MLB",
         "ebay_query":    f"baseball {EXCL}",
         "ebay_category": "261328",
-        "aspect_filter": "categoryId:261328,Sport:{Baseball},Graded:{No}",
         "discord_emoji": "⚾",
         "color":         0x002D72,
     },
@@ -75,7 +77,6 @@ CATEGORIES = {
         "sport":         "NHL",
         "ebay_query":    f"hockey {EXCL}",
         "ebay_category": "261328",
-        "aspect_filter": "categoryId:261328,Sport:{Ice Hockey},Graded:{No}",
         "discord_emoji": "🏒",
         "color":         0x000000,
     },
@@ -83,7 +84,6 @@ CATEGORIES = {
         "sport":         "Pokemon",
         "ebay_query":    EXCL,
         "ebay_category": "183454",   # Pokemon Cards
-        "aspect_filter": "categoryId:183454,Graded:{No}",
         "discord_emoji": "⚡",
         "color":         0xFFCC00,
     },
@@ -183,15 +183,12 @@ def search_ebay(category_config: dict, listing_type: str) -> list:
         }
 
         if listing_type == "bin":
-            params["filter"] = "buyingOptions:{FIXED_PRICE},price:[15..],conditionIds:{1000|2750}"
+            params["filter"] = "buyingOptions:{FIXED_PRICE},price:[10..],conditionIds:{1000|2750}"
         else:
             from datetime import timezone, timedelta
             six_hours = (datetime.now(timezone.utc) + timedelta(hours=6)).strftime("%Y-%m-%dT%H:%M:%SZ")
             now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-            params["filter"] = f"buyingOptions:{{AUCTION}},price:[15..],conditionIds:{{1000|2750}},itemEndDate:[{now}..{six_hours}]"
-
-        if category_config.get("aspect_filter"):
-            params["aspect_filter"] = category_config["aspect_filter"]
+            params["filter"] = f"buyingOptions:{{AUCTION}},price:[10..],conditionIds:{{1000|2750}},itemEndDate:[{now}..{six_hours}]"
 
         time.sleep(1)
         resp = requests.get(
@@ -232,11 +229,13 @@ def load_gradeable_cards(sport: str) -> list:
         result = supabase.table("mv_grade_premiums") \
             .select("player_name, set_name, set_year, card_number, variation, "
                     "canonical_name, is_rookie, raw_price, psa9_price, psa10_price, "
-                    "grading_score, raw_to_psa9_mult") \
+                    "grading_score, raw_to_psa9_mult, psa10_sale_count_30d, raw_sale_count_30d") \
             .eq("sport", sport) \
-            .gte("grading_score", MIN_GRADING_SCORE) \
             .not_.is_("raw_price", "null") \
             .not_.is_("psa10_price", "null") \
+            .gte("raw_sale_count_30d", MIN_RAW_SALES_30D) \
+            .gte("psa10_sale_count_30d", MIN_PSA10_SALES) \
+            .gte("raw_price", 10) \
             .range(offset, offset + batch_size - 1) \
             .execute()
 
@@ -248,8 +247,20 @@ def load_gradeable_cards(sport: str) -> list:
             break
         offset += batch_size
 
-    log.info(f"  Loaded {len(all_cards)} gradeable {sport} cards")
-    _card_cache[sport] = all_cards
+    # Apply ROI filters in Python (PostgREST can't do arithmetic filters)
+    filtered = []
+    for c in all_cards:
+        try:
+            raw   = float(c["raw_price"])
+            psa10 = float(c["psa10_price"])
+            roi   = psa10 / (raw + GRADING_COST)
+            net   = psa10 - raw - GRADING_COST
+            if roi >= MIN_ROI_MULTIPLE and roi <= MAX_ROI_MULTIPLE and net >= MIN_NET_PROFIT:
+                filtered.append(c)
+        except (TypeError, ValueError, ZeroDivisionError):
+            continue
+    log.info(f"  Loaded {len(all_cards)} cards, {len(filtered)} passed ROI filter for {sport}")
+    _card_cache[sport] = filtered
     return all_cards
 
 # ===========================================================================
@@ -405,9 +416,21 @@ def process_items(items: list, listing_type: str, cards: list,
             skipped_graded += 1
             continue
 
-        # Pre-filter: skip vague titles with no meaningful words (< 3 words or all short words)
+        # Pre-filter: skip vague titles
         title_words = [w for w in re.split(r'\W+', title) if len(w) >= 4]
         if len(title_words) < 2:
+            no_candidates += 1
+            continue
+
+        # Extract year and card# from title upfront — used throughout
+        ebay_year_match = re.search(r'\b(19|20)\d{2}\b', title)
+        ebay_card_match = re.search(r'#\s*(\w+)', title)
+        ebay_year       = int(ebay_year_match.group()) if ebay_year_match else None
+        ebay_card_num   = ebay_card_match.group(1).lstrip('0') if ebay_card_match else None
+
+        # Must have year OR card# to be trustworthy
+        if not ebay_year and not ebay_card_num:
+            log.info(f"  VAGUE SKIP: no year or card# in title — \"{title}\"")
             no_candidates += 1
             continue
 
@@ -417,7 +440,7 @@ def process_items(items: list, listing_type: str, cards: list,
             no_candidates += 1
             continue
 
-        # Step 2: use best candidate (already scored by partial_ratio in get_candidate_players)
+        # Step 2: best player match
         matched_player = candidates[0]
 
         # Step 3: get cards for this player
@@ -426,86 +449,62 @@ def process_items(items: list, listing_type: str, cards: list,
             no_player += 1
             continue
 
-        # Step 4: fuzzy match to specific card canonical name
-        player_canonicals = [c["canonical_name"] for c in player_cards if c.get("canonical_name")]
-        if not player_canonicals:
-            no_card += 1
-            continue
+        # Step 4: NEW matching logic using set_name + variation + card_number
+        title_lower = title.lower()
+        matched_card = None
+        best_score   = 0
 
-        card_match = fuzz_process.extractOne(
-            clean_title(title.lower()),
-            player_canonicals,
-            scorer=fuzz.token_set_ratio,
-            score_cutoff=70,
-        )
-        if not card_match:
-            no_card += 1
-            continue
+        for card in player_cards:
+            set_year    = int(card["set_year"]) if card.get("set_year") else None
+            db_card_num = str(card.get("card_number") or "").lstrip('0')
+            set_name    = (card.get("set_name") or "").lower()
+            variation   = (card.get("variation") or "").lower()
+            is_base     = variation in ("", "base", "none")
 
-        matched_canonical = card_match[0]
-        matched_card = next((c for c in player_cards if c["canonical_name"] == matched_canonical), None)
-        if not matched_card:
-            no_card += 1
-            continue
-
-        # Strict validation: extract identifiers from eBay title
-        # If none found → too vague to trust, skip
-        # If found → must match DB card exactly
-        ebay_year_match  = re.search(r'\b(19|20)\d{2}\b', title)
-        ebay_card_match  = re.search(r'#\s*(\w+)', title)
-        ebay_year        = int(ebay_year_match.group()) if ebay_year_match else None
-        ebay_card_num    = ebay_card_match.group(1).lstrip('0') if ebay_card_match else None
-
-        set_year         = int(matched_card["set_year"]) if matched_card.get("set_year") else None
-        db_card_num      = str(matched_card.get("card_number") or "").lstrip('0')
-
-        # If no year AND no card number found in title → skip (too vague)
-        if not ebay_year and not ebay_card_num:
-            log.info(f"  VAGUE SKIP: no year or card# in title — \"{title}\"")
-            no_card += 1
-            continue
-
-        # Year must match exactly if present
-        if ebay_year and set_year and ebay_year != set_year:
-            log.info(f"  YEAR SKIP: eBay {ebay_year} != DB {set_year} — \"{title}\"")
-            no_card += 1
-            continue
-
-        # Card number must match exactly if present in both
-        if ebay_card_num and db_card_num and ebay_card_num != db_card_num:
-            log.info(f"  CARD# SKIP: eBay #{ebay_card_num} != DB #{db_card_num} — \"{title}\"")
-            no_card += 1
-            continue
-
-        # Set name validation: extract known brand/set keywords from eBay title
-        # At least one must appear in the matched canonical name
-        SET_KEYWORDS = [
-            "prizm", "chrome", "topps", "bowman", "donruss", "optic", "mosaic",
-            "select", "contenders", "score", "fleer", "upper deck", "skybox",
-            "stadium club", "finest", "heritage", "archives", "series",
-            "hoops", "panini", "sp authentic", "exquisite", "immaculate",
-            "national treasures", "phoenix", "obsidian", "spectra", "revolution",
-            "absolute", "certified", "playbook", "prestige", "legacy",
-            "base set", "jungle", "fossil", "team rocket", "gym", "neo",
-            "ex", "diamond", "legend", "platinum",
-        ]
-        title_lower_set = title.lower()
-        canonical_lower = matched_canonical.lower()
-        title_set_keywords = [kw for kw in SET_KEYWORDS if kw in title_lower_set]
-
-        if title_set_keywords:
-            if not any(kw in canonical_lower for kw in title_set_keywords):
-                log.info(f"  SET SKIP: title keywords {title_set_keywords} not in \"{matched_canonical}\"")
-                no_card += 1
+            # Year must match if present in title
+            if ebay_year and set_year and ebay_year != set_year:
                 continue
+
+            # Card# must match if present in both
+            if ebay_card_num and db_card_num and ebay_card_num != db_card_num:
+                continue
+
+            # Build match target from set_name (always) + variation keywords (if not base)
+            # Strip sport word from set_name for matching (e.g. "Basketball", "Football")
+            set_core = re.sub(
+                r'\b(basketball|football|baseball|hockey|pokemon)\b', '',
+                set_name, flags=re.IGNORECASE
+            ).strip()
+
+            # Score: how well does the eBay title match the set name?
+            set_score = fuzz.token_set_ratio(title_lower, set_core)
+
+            # Bonus points for variation match (if not base card)
+            variation_score = 0
+            if not is_base and variation:
+                variation_score = fuzz.token_set_ratio(title_lower, variation)
+                # Require at least partial variation match for non-base cards
+                if variation_score < 40:
+                    continue
+
+            total_score = set_score + (variation_score * 0.5)
+
+            if total_score > best_score:
+                best_score   = total_score
+                matched_card = card
+
+        if not matched_card or best_score < 60:
+            no_card += 1
+            continue
+
+        matched_canonical = matched_card["canonical_name"]
+        log.info(f"CARD MATCH: \"{title}\" -> {matched_canonical} (score: {best_score:.0f})")
 
         # Step 5: get eBay price
         if listing_type == "bin":
             price = float(item.get("price", {}).get("value", 0))
         else:
             price = float(item.get("price", {}).get("value", 0))
-
-        log.info(f"CARD MATCH: \"{title}\" -> {matched_canonical} | eBay: ${price:.2f} | raw median: ${matched_card['raw_price']:.2f}")
 
         if price <= 0:
             continue
