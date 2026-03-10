@@ -38,38 +38,44 @@ MIN_GRADING_SCORE = 70
 MIN_PROFIT = 50
 
 # eBay search config per category
-EXCL = '-"you pick" -"lot of" -"choose your" -"complete your set" -"u pick" -PSA -BGS -SGC -CGC -graded -autograph -auto'
+EXCL = (
+    '-"you pick" -"lot of" -"choose your" -"complete your set" -"u pick"'
+    ' -"card lot" -"cards lot" -"pack of" -"box of" -"blaster" -"hobby box"'
+    ' -"factory sealed" -"sealed box" -"sealed pack" -"complete set"'
+    ' -"mystery" -"random" -"bundle" -"collection" -"bulk"'
+    ' -PSA -BGS -SGC -CGC -graded -autograph -auto'
+)
 
 CATEGORIES = {
     "NFL": {
         "sport":          "NFL",
         "ebay_query":     f"football {EXCL}",
-        "ebay_category":  "212",      # Sports Trading Cards
-        "aspect_filter":  "categoryId:212,Sport:{Football}",
+        "ebay_category":  "261328",   # Sports Trading Card Singles
+        "aspect_filter":  "categoryId:261328,Sport:{Football}",
         "discord_emoji":  "🏈",
         "color":          0x013369,
     },
     "NBA": {
         "sport":          "NBA",
         "ebay_query":     f"basketball {EXCL}",
-        "ebay_category":  "212",      # Sports Trading Cards
-        "aspect_filter":  "categoryId:212,Sport:{Basketball}",
+        "ebay_category":  "261328",   # Sports Trading Card Singles
+        "aspect_filter":  "categoryId:261328,Sport:{Basketball}",
         "discord_emoji":  "🏀",
         "color":          0xC9082A,
     },
     "MLB": {
         "sport":          "MLB",
         "ebay_query":     f"baseball {EXCL}",
-        "ebay_category":  "212",      # Sports Trading Cards
-        "aspect_filter":  "categoryId:212,Sport:{Baseball}",
+        "ebay_category":  "261328",   # Sports Trading Card Singles
+        "aspect_filter":  "categoryId:261328,Sport:{Baseball}",
         "discord_emoji":  "⚾",
         "color":          0x002D72,
     },
     "NHL": {
         "sport":          "NHL",
         "ebay_query":     f"hockey {EXCL}",
-        "ebay_category":  "212",      # Sports Trading Cards
-        "aspect_filter":  "categoryId:212,Sport:{Ice Hockey}",
+        "ebay_category":  "261328",   # Sports Trading Card Singles
+        "aspect_filter":  "categoryId:261328,Sport:{Ice Hockey}",
         "discord_emoji":  "🏒",
         "color":          0x000000,
     },
@@ -289,7 +295,7 @@ def parse_grade(title: str) -> str:
     """Return grader+grade if present, else 'Raw'."""
     # All known grading companies including obscure ones
     GRADERS = (
-        "PSA|BGS|SGC|CGC|CSG|HGA|GAI|GMA|KSA|WCG|BVG|CCG|CGA|CCA|"
+        "PSA|BGS|SGC|CGC|CSG|HGA|GAI|GMA|KSA|WCG|BVG|CCG|CGA|CCA|OCE|"
         "PGS|OCG|AGS|TAG|ISA|BCCG|GAS|PTA|DGA|AFA|MNT|GEM MINT"
     )
     match = re.search(rf'\b({GRADERS})\s*(\d+\.?\d*)', title.upper())
