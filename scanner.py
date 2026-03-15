@@ -28,10 +28,9 @@ EBAY_SEARCH_URL = "https://api.ebay.com/buy/browse/v1/item_summary/search"
 EBAY_SCOPE = "https://api.ebay.com/oauth/api_scope"
 
 # Price threshold: alert if eBay listing <= raw_price * this multiplier
-# 1.05 = within 5% above DB median raw price
 PRICE_THRESHOLD = 1.15
 
-# ROI-based card inclusion filters (replaces grading_score cutoff)
+# ROI-based card inclusion filters
 MIN_ROI_MULTIPLE  = 2.5   # psa10 / (raw + grading_cost) must be >= this
 MAX_ROI_MULTIPLE  = 500   # cap outliers with bad data
 MIN_NET_PROFIT    = 20    # psa10 - raw - grading_cost must be >= this
@@ -42,7 +41,10 @@ GRADING_COST      = 28    # assumed grading cost per card
 # Minimum PSA 10 profit after grading to alert
 MIN_PROFIT = 50
 
-# eBay search config per category
+# Minimum score for a card to be considered matched
+MIN_MATCH_SCORE = 50
+
+# eBay search exclusions
 EXCL = (
     '-"you pick" -"lot of" -"choose your" -"complete your set" -"u pick"'
     ' -"card lot" -"pack of" -"box of" -"blaster" -"hobby box"'
@@ -55,7 +57,7 @@ EXCL = (
     ' -cards'
 )
 
-# Python-side exclusion filter — mirrors EXCL query string (eBay doesn't guarantee exclusions)
+# Python-side exclusion filter
 EXCL_KEYWORDS = [
     "you pick", "lot of", "choose your", "complete your set", "u pick",
     "card lot", "pack of", "box of", "blaster", "hobby box",
@@ -65,6 +67,7 @@ EXCL_KEYWORDS = [
     "art card", "fan art", "custom card", "custom slab", "custom art",
     "uncut", "panels", "stamp card", "holographic",
 ]
+
 
 CATEGORIES = {
     "NFL": {
@@ -101,7 +104,8 @@ CATEGORIES = {
     },
     "Pokemon": {
         "sport":         "Pokemon",
-        "ebay_query":    EXCL,
+        # Explicitly require "pokemon" and exclude other TCG games sharing category 183454
+        "ebay_query":    f'pokemon -"magic the gathering" -MTG -yugioh -lorcana -"one piece" -"dragon ball" -vanguard {EXCL}',
         "ebay_category": "183454",
         "aspect_filter": "categoryId:183454,Graded:{No}",
         "discord_emoji": "⚡",
@@ -251,7 +255,7 @@ def search_ebay(category_config: dict, listing_type: str) -> list:
 _card_cache = {}  # sport -> list of card dicts
 
 def load_gradeable_cards(sport: str, min_year: int = None) -> list:
-    """Load cards with grading_score >= MIN_GRADING_SCORE for a given sport."""
+    """Load cards passing ROI filter for a given sport."""
     cache_key = f"{sport}:{min_year}"
     if cache_key in _card_cache:
         return _card_cache[cache_key]
@@ -297,6 +301,7 @@ def load_gradeable_cards(sport: str, min_year: int = None) -> list:
                 filtered.append(c)
         except (TypeError, ValueError, ZeroDivisionError):
             continue
+
     log.info(f"  Loaded {len(all_cards)} cards, {len(filtered)} passed ROI filter for {sport}")
     _card_cache[cache_key] = filtered
     return filtered
@@ -331,9 +336,166 @@ def get_candidate_players(title: str, index: dict) -> list:
         score = fuzz.partial_ratio(cleaned_name, title_lower)
         if score >= 92:
             matches.append((original_name, score))
-    # Return sorted by score descending, deduplicated
     matches.sort(key=lambda x: -x[1])
     return [m[0] for m in matches]
+
+# ===========================================================================
+# Set / parallel matching — token-based, driven entirely from DB data
+# ===========================================================================
+
+# Words to strip from set names before tokenizing — these are noise words
+# that appear in nearly every title and add no signal
+SET_NOISE_WORDS = {
+    "basketball", "football", "baseball", "hockey", "pokemon",
+    "trading", "card", "cards", "tcg", "nfl", "nba", "mlb", "nhl",
+}
+
+# Variation values that mean "base card" — no variation token checking needed
+BASE_VARIATIONS = {"", "base", "none", "base card", "n/a"}
+
+
+def tokenize(text: str, min_len: int = 3) -> list:
+    """Split text into lowercase tokens, filtering short/noise words."""
+    return [
+        w.lower() for w in re.split(r'[\W_]+', text)
+        if len(w) >= min_len
+    ]
+
+
+def set_tokens(set_name: str) -> list:
+    """
+    Tokenize a DB set name, removing noise words.
+    e.g. "Panini Prizm Football" -> ["panini", "prizm"]
+    """
+    tokens = tokenize(set_name)
+    return [t for t in tokens if t not in SET_NOISE_WORDS]
+
+
+def variation_tokens(variation: str) -> list:
+    """
+    Tokenize a DB variation string.
+    e.g. "Silver Prizm" -> ["silver", "prizm"]
+         "Pokemon Center" -> ["pokemon", "center"]
+         "Red White and Blue" -> ["red", "white", "blue"]
+    """
+    # Strip very short connector words (and, the, of, etc.) but keep 3+ char tokens
+    stop = {"and", "the", "of", "for", "a"}
+    return [t for t in tokenize(variation, min_len=2) if t not in stop]
+
+
+def score_card_match(title_lower: str, card: dict,
+                     ebay_year: int, ebay_year2: int,
+                     ebay_card_num: str) -> float:
+    """
+    Score how well an eBay title matches a specific DB card.
+    Uses actual DB field values directly — no hardcoded keyword lists.
+
+    Returns float score (higher = better match).
+    Returns -1.0 to hard-reject (year or card# mismatch).
+
+    Scoring breakdown:
+      Set name token match  : up to 80 pts
+      Variation token match : up to 80 pts  (non-base cards)
+      Base card protection  : -40 pts penalty if base but title has variation tokens
+      Year match bonus      : 10 pts
+    """
+    set_year    = int(card["set_year"]) if card.get("set_year") else None
+    db_card_num = str(card.get("card_number") or "").lstrip("0")
+    set_name    = (card.get("set_name") or "")
+    variation   = (card.get("variation") or "").strip()
+    is_base     = variation.lower() in BASE_VARIATIONS
+
+    # --- Hard filter: year ---
+    if set_year and (ebay_year or ebay_year2):
+        if ebay_year != set_year and ebay_year2 != set_year:
+            return -1.0
+
+    # --- Hard filter: card number ---
+    if ebay_card_num and db_card_num:
+        if ebay_card_num != db_card_num:
+            return -1.0
+
+    score = 0.0
+
+    # ---------------------------------------------------------------
+    # SET NAME matching
+    # Tokenize the DB set name and check how many tokens appear in
+    # the eBay title. These are the actual words from your DB.
+    # ---------------------------------------------------------------
+    s_tokens = set_tokens(set_name)
+    if s_tokens:
+        found = [t for t in s_tokens if t in title_lower]
+        ratio = len(found) / len(s_tokens)
+        score += ratio * 60  # up to 60 pts
+
+        # Full match bonus
+        if len(found) == len(s_tokens):
+            score += 20  # up to 80 pts total for set
+
+        # Penalty: no set tokens at all in title
+        if not found:
+            score -= 20
+    else:
+        # Set name had no useful tokens after stripping noise
+        # Give a small neutral score so it isn't hard-penalized
+        score += 10
+
+    # ---------------------------------------------------------------
+    # VARIATION matching
+    # For non-base cards: tokenize the DB variation and require those
+    # tokens to appear in the eBay title.
+    # For base cards: penalize if the title contains variation-like tokens
+    # that suggest it's NOT a base card.
+    # ---------------------------------------------------------------
+    if not is_base:
+        v_tokens = variation_tokens(variation)
+        if v_tokens:
+            found_v = [t for t in v_tokens if t in title_lower]
+            ratio_v = len(found_v) / len(v_tokens)
+            score += ratio_v * 60  # up to 60 pts
+
+            # Full match bonus
+            if len(found_v) == len(v_tokens):
+                score += 20  # up to 80 pts total for variation
+
+            # Hard penalty: variation has tokens but NONE appear in title
+            # e.g. DB is "Silver Prizm" but title says nothing about silver/prizm
+            # e.g. DB is "Pokemon Center" but title has no mention of center
+            if not found_v:
+                score -= 50
+
+        else:
+            # Variation string exists but produced no tokens (e.g. "SP")
+            # Do a direct substring check as fallback
+            if variation.lower() in title_lower:
+                score += 20
+            else:
+                score -= 10
+
+    else:
+        # DB card is base. Check if the title contains tokens from any
+        # known non-base variation in our DB. We do this by tokenizing
+        # the title and looking for words that look like variation markers.
+        # We use a small hardcoded set of the STRONGEST signals only —
+        # words that virtually never appear in a base card title.
+        STRONG_NON_BASE = {
+            "silver", "gold", "refractor", "prizm", "holo", "foil",
+            "rainbow", "atomic", "laser", "hyper", "mojo", "cracked",
+            "shimmer", "wave", "pulsar", "disco", "glossy",
+            "stamped", "prerelease", "shadowless", "cosmos",
+            "reverse", "fullart", "altart", "promo",
+        }
+        title_tokens = set(tokenize(title_lower))
+        non_base_hits = title_tokens & STRONG_NON_BASE
+        if non_base_hits:
+            score -= 40  # Title looks like a parallel, DB card is base
+
+    # --- Year match bonus ---
+    if set_year and (ebay_year == set_year or ebay_year2 == set_year):
+        score += 10
+
+    return score
+
 
 # ===========================================================================
 # Title parsing helpers
@@ -373,7 +535,7 @@ def post_discord_alert(card: dict, item: dict, listing_type: str,
     raw_price  = float(card["raw_price"])
     psa10      = float(card["psa10_price"])
     psa9       = float(card.get("psa9_price") or 0)
-    grade_cost = 27.99
+    grade_cost = 27.99  # PSA Value tier default
     net_profit = psa10 - ebay_price - grade_cost
     psa9_mult  = float(card.get("raw_to_psa9_mult") or 0)
 
@@ -429,8 +591,6 @@ def process_items(items: list, listing_type: str, cards: list,
 
     log.info(f"Processing {len(items)} {listing_type} items...")
     alerts_sent = 0
-
-    canonical_names = [c["canonical_name"] for c in cards if c.get("canonical_name")]
 
     sample_players = list({c["player_name"] for c in cards if c.get("player_name")})[:10]
     log.info(f"  Sample DB players: {sample_players}")
@@ -506,52 +666,36 @@ def process_items(items: list, listing_type: str, cards: list,
             no_player += 1
             continue
 
-        # Step 4: match using set_name + variation + card_number
-        title_lower = title.lower()
+        # Step 4: score each card using brand + parallel keyword matching
+        title_lower  = title.lower()
         matched_card = None
-        best_score   = 0
+        best_score   = 0.0
 
         for card in player_cards:
-            set_year    = int(card["set_year"]) if card.get("set_year") else None
-            db_card_num = str(card.get("card_number") or "").lstrip('0')
-            set_name    = (card.get("set_name") or "").lower()
-            variation   = (card.get("variation") or "").lower()
-            is_base     = variation in ("", "base", "none")
-
-            if set_year and (ebay_year or ebay_year2):
-                if ebay_year != set_year and ebay_year2 != set_year:
-                    continue
-
-            if ebay_card_num and db_card_num and ebay_card_num != db_card_num:
-                continue
-
-            set_core = re.sub(
-                r'\b(basketball|football|baseball|hockey|pokemon)\b', '',
-                set_name, flags=re.IGNORECASE
-            ).strip()
-
-            set_score_set   = fuzz.token_set_ratio(title_lower, set_core)
-            set_score_sort  = fuzz.token_sort_ratio(title_lower, set_core)
-            set_score       = (set_score_set * 0.4) + (set_score_sort * 0.6)
-
-            variation_score = 0
-            if not is_base and variation:
-                variation_score = fuzz.token_set_ratio(title_lower, variation)
-                if variation_score < 40:
-                    continue
-
-            total_score = set_score + (variation_score * 0.5)
-
-            if total_score > best_score:
-                best_score   = total_score
+            s = score_card_match(
+                title_lower, card,
+                ebay_year, ebay_year2,
+                ebay_card_num
+            )
+            if s < 0:
+                continue  # hard-rejected
+            if s > best_score:
+                best_score   = s
                 matched_card = card
 
-        if not matched_card or best_score < 75:
+        if not matched_card or best_score < MIN_MATCH_SCORE:
             no_card += 1
+            log.info(
+                f"  NO_CARD: \"{title}\" -> player={matched_player} "
+                f"best_score={best_score:.0f} cards_checked={len(player_cards)}"
+            )
             continue
 
         matched_canonical = matched_card["canonical_name"]
-        log.info(f"CARD MATCH: \"{title}\" -> {matched_canonical} (score: {best_score:.0f})")
+        log.info(
+            f"CARD MATCH: \"{title}\" -> {matched_canonical} "
+            f"(score={best_score:.0f} variation={matched_card.get('variation') or 'base'})"
+        )
 
         # Step 5: get eBay price
         price = float(item.get("price", {}).get("value", 0))
@@ -565,7 +709,10 @@ def process_items(items: list, listing_type: str, cards: list,
         # Step 6: check price threshold
         if price > raw_median * PRICE_THRESHOLD:
             price_too_high += 1
-            log.info(f"  PRICE SKIP: eBay ${price:.2f} > threshold ${raw_median * PRICE_THRESHOLD:.2f} (median ${raw_median:.2f})")
+            log.info(
+                f"  PRICE SKIP: eBay ${price:.2f} > threshold "
+                f"${raw_median * PRICE_THRESHOLD:.2f} (median ${raw_median:.2f})"
+            )
             continue
 
         # Step 7: check minimum profit
@@ -581,14 +728,23 @@ def process_items(items: list, listing_type: str, cards: list,
         if has_alerted(url):
             continue
 
-        log.info(f"DEAL: {matched_canonical} | eBay: ${price:.2f} | Raw median: ${raw_median:.2f} | PSA10: ${psa10:.2f} | Profit: ${net_profit:.2f}")
+        log.info(
+            f"DEAL: {matched_canonical} | eBay: ${price:.2f} | "
+            f"Raw median: ${raw_median:.2f} | PSA10: ${psa10:.2f} | "
+            f"Profit: ${net_profit:.2f}"
+        )
 
         record_alert(url)
         post_discord_alert(matched_card, item, listing_type, price, category_config)
         alerts_sent += 1
-        time.sleep(0.5)
+        time.sleep(0.5)  # small delay between Discord posts
 
-    log.info(f"  Sent {alerts_sent} alerts for {listing_type} | graded={skipped_graded} no_candidates={no_candidates} no_player={no_player} no_card={no_card} price_high={price_too_high} low_profit={low_profit}")
+    log.info(
+        f"  Sent {alerts_sent} alerts for {listing_type} | "
+        f"graded={skipped_graded} no_candidates={no_candidates} "
+        f"no_player={no_player} no_card={no_card} "
+        f"price_high={price_too_high} low_profit={low_profit}"
+    )
 
 # ===========================================================================
 # Main scan job
@@ -599,11 +755,12 @@ def run_scan():
     log.info(f"Starting scan — {datetime.utcnow().isoformat()}")
     log.info("=" * 60)
 
+    # Clear card cache each run so prices stay fresh
     _card_cache.clear()
 
     for cat_name, cat_config in CATEGORIES.items():
         log.info(f"\n--- Scanning {cat_name} ---")
-        time.sleep(5)
+        time.sleep(5)  # pause between sports
 
         try:
             cards = load_gradeable_cards(cat_config["sport"], min_year=cat_config.get("min_year"))
@@ -626,15 +783,17 @@ def run_scan():
     log.info("\nScan complete")
 
 # ===========================================================================
-# Entry point
+# Entry point — runs once immediately then hourly
 # ===========================================================================
 
 if __name__ == "__main__":
     init_alert_db()
     log.info("Grade opportunity scanner starting...")
 
+    # Run immediately on startup
     run_scan()
 
+    # Then schedule hourly
     schedule.every(1).hours.do(run_scan)
 
     while True:
