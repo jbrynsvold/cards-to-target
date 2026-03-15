@@ -341,7 +341,6 @@ def get_candidate_players(title: str, index: dict) -> list:
 
 def parse_grade(title: str) -> str:
     """Return grader+grade if present, else 'Raw'."""
-    # All known grading companies including obscure ones
     GRADERS = (
         "PSA|BGS|SGC|CGC|CSG|HGA|GAI|GMA|KSA|WCG|BVG|CCG|CGA|CCA|OCE|"
         "PGS|OCG|AGS|TAG|ISA|BCCG|GAS|PTA|DGA|AFA|MNT|GEM MINT"
@@ -350,19 +349,15 @@ def parse_grade(title: str) -> str:
     match = re.search(rf'\b({GRADERS})\s*(\d+\.?\d*)', t)
     if match:
         return f"{match.group(1)} {match.group(2)}"
-    # Catch "Beckett" style grades
     if re.search(r'\bBECKETT\b', t):
         return "Beckett"
-    # Catch "Gem Mint 10", "Gem Mt 10", "GEM MT 10", "GEM 10" variants
     if re.search(r'\bGEM\s*(MINT|MT)?\s*\d+', t):
         return "Graded"
-    # Catch standalone numeric grades that imply graded: "9.5 MINT", "10 MINT"
     if re.search(r'\b(9\.5|10)\s*(MINT|GEM)\b', t):
         return "Graded"
     return "Raw"
 
 def clean_title(title: str) -> str:
-    import re
     return re.sub(r'\b(RC|SP|SSP|rookie|card|lot|pack)\b', '', title, flags=re.IGNORECASE).strip()
 
 # ===========================================================================
@@ -378,7 +373,7 @@ def post_discord_alert(card: dict, item: dict, listing_type: str,
     raw_price  = float(card["raw_price"])
     psa10      = float(card["psa10_price"])
     psa9       = float(card.get("psa9_price") or 0)
-    grade_cost = 27.99  # PSA Value tier default
+    grade_cost = 27.99
     net_profit = psa10 - ebay_price - grade_cost
     psa9_mult  = float(card.get("raw_to_psa9_mult") or 0)
 
@@ -435,10 +430,8 @@ def process_items(items: list, listing_type: str, cards: list,
     log.info(f"Processing {len(items)} {listing_type} items...")
     alerts_sent = 0
 
-    # Build canonical_name list for card-level fuzzy matching
     canonical_names = [c["canonical_name"] for c in cards if c.get("canonical_name")]
 
-    # Debug: show sample player names and eBay titles
     sample_players = list({c["player_name"] for c in cards if c.get("player_name")})[:10]
     log.info(f"  Sample DB players: {sample_players}")
     raw_titles = [item.get("title","") for item in items if parse_grade(item.get("title","")) == "Raw"]
@@ -461,22 +454,23 @@ def process_items(items: list, listing_type: str, cards: list,
             skipped_graded += 1
             continue
 
-        # Python-side exclusion filter (eBay doesn't guarantee negative keywords)
+        # Python-side exclusion filter
         title_lower_excl = title.lower()
         if any(kw in title_lower_excl for kw in EXCL_KEYWORDS):
             no_candidates += 1
+            log.info(f"  NO_CANDIDATE [excl_keyword]: {title}")
             continue
 
         # Pre-filter: skip vague titles
         title_words = [w for w in re.split(r'\W+', title) if len(w) >= 4]
         if len(title_words) < 2:
             no_candidates += 1
+            log.info(f"  NO_CANDIDATE [vague_title]: {title}")
             continue
 
-        # Extract year and card# from title upfront — used throughout
+        # Extract year and card# from title
         ebay_card_match = re.search(r'#\s*(\w+)', title)
         ebay_card_num   = ebay_card_match.group(1).lstrip('0') if ebay_card_match else None
-        # Handle full year (2025) or short YY-YY format (25-26, 19-20)
         full_year_match = re.search(r'\b(19|20)\d{2}\b', title)
         ebay_year, ebay_year2 = None, None
         if full_year_match:
@@ -489,17 +483,18 @@ def process_items(items: list, listing_type: str, cards: list,
                     ebay_year  = (1900 if y1 >= 90 else 2000) + y1
                     ebay_year2 = 2000 + y2
 
-        # Must have year OR card# to be trustworthy (skip for TCGs — set names identify cards)
+        # Must have year OR card# to be trustworthy (skip for TCGs)
         is_tcg = category_config.get("is_tcg", False)
         if not is_tcg and not ebay_year and not ebay_card_num:
-            log.info(f"  VAGUE SKIP: no year or card# in title — \"{title}\"")
             no_candidates += 1
+            log.info(f"  NO_CANDIDATE [no_year_or_cardnum]: {title}")
             continue
 
-        # Step 1: find candidate players from title words
+        # Step 1: find candidate players from title
         candidates = get_candidate_players(title, player_index)
         if not candidates:
             no_candidates += 1
+            log.info(f"  NO_CANDIDATE [no_player_match]: {title}")
             continue
 
         # Step 2: best player match
@@ -511,7 +506,7 @@ def process_items(items: list, listing_type: str, cards: list,
             no_player += 1
             continue
 
-        # Step 4: NEW matching logic using set_name + variation + card_number
+        # Step 4: match using set_name + variation + card_number
         title_lower = title.lower()
         matched_card = None
         best_score   = 0
@@ -523,33 +518,25 @@ def process_items(items: list, listing_type: str, cards: list,
             variation   = (card.get("variation") or "").lower()
             is_base     = variation in ("", "base", "none")
 
-            # Year must match if present in title (accept either year in YY-YY range)
             if set_year and (ebay_year or ebay_year2):
                 if ebay_year != set_year and ebay_year2 != set_year:
                     continue
 
-            # Card# must match if present in both
             if ebay_card_num and db_card_num and ebay_card_num != db_card_num:
                 continue
 
-            # Build match target from set_name (always) + variation keywords (if not base)
-            # Strip sport word from set_name for matching (e.g. "Basketball", "Football")
             set_core = re.sub(
                 r'\b(basketball|football|baseball|hockey|pokemon)\b', '',
                 set_name, flags=re.IGNORECASE
             ).strip()
 
-            # Score: how well does the eBay title match the set name?
-            # Use partial_ratio to require set name words to actually appear
             set_score_set   = fuzz.token_set_ratio(title_lower, set_core)
             set_score_sort  = fuzz.token_sort_ratio(title_lower, set_core)
             set_score       = (set_score_set * 0.4) + (set_score_sort * 0.6)
 
-            # Bonus points for variation match (if not base card)
             variation_score = 0
             if not is_base and variation:
                 variation_score = fuzz.token_set_ratio(title_lower, variation)
-                # Require at least partial variation match for non-base cards
                 if variation_score < 40:
                     continue
 
@@ -567,11 +554,7 @@ def process_items(items: list, listing_type: str, cards: list,
         log.info(f"CARD MATCH: \"{title}\" -> {matched_canonical} (score: {best_score:.0f})")
 
         # Step 5: get eBay price
-        if listing_type == "bin":
-            price = float(item.get("price", {}).get("value", 0))
-        else:
-            price = float(item.get("price", {}).get("value", 0))
-
+        price = float(item.get("price", {}).get("value", 0))
         if price <= 0:
             continue
 
@@ -579,7 +562,7 @@ def process_items(items: list, listing_type: str, cards: list,
         if raw_median <= 0:
             continue
 
-        # Step 6: check price threshold (within 5% of DB median)
+        # Step 6: check price threshold
         if price > raw_median * PRICE_THRESHOLD:
             price_too_high += 1
             log.info(f"  PRICE SKIP: eBay ${price:.2f} > threshold ${raw_median * PRICE_THRESHOLD:.2f} (median ${raw_median:.2f})")
@@ -603,7 +586,7 @@ def process_items(items: list, listing_type: str, cards: list,
         record_alert(url)
         post_discord_alert(matched_card, item, listing_type, price, category_config)
         alerts_sent += 1
-        time.sleep(0.5)  # small delay between Discord posts
+        time.sleep(0.5)
 
     log.info(f"  Sent {alerts_sent} alerts for {listing_type} | graded={skipped_graded} no_candidates={no_candidates} no_player={no_player} no_card={no_card} price_high={price_too_high} low_profit={low_profit}")
 
@@ -616,29 +599,23 @@ def run_scan():
     log.info(f"Starting scan — {datetime.utcnow().isoformat()}")
     log.info("=" * 60)
 
-    # Clear card cache each run so prices stay fresh
     _card_cache.clear()
 
     for cat_name, cat_config in CATEGORIES.items():
         log.info(f"\n--- Scanning {cat_name} ---")
-        time.sleep(5)  # pause between sports
+        time.sleep(5)
 
         try:
-            # Load gradeable cards for this sport
             cards = load_gradeable_cards(cat_config["sport"], min_year=cat_config.get("min_year"))
             if not cards:
                 log.info(f"No gradeable cards found for {cat_name}, skipping")
                 continue
 
-            # Build player index
             player_index = build_player_index(cards)
 
-            # Search eBay — BIN and auction in parallel would be nice but
-            # keeping sequential to avoid rate limit issues
             bin_items     = search_ebay(cat_config, "bin")
             auction_items = search_ebay(cat_config, "auction")
 
-            # Process results
             process_items(bin_items,     "bin",     cards, player_index, cat_config)
             process_items(auction_items, "auction", cards, player_index, cat_config)
 
@@ -649,17 +626,15 @@ def run_scan():
     log.info("\nScan complete")
 
 # ===========================================================================
-# Entry point — runs once immediately then hourly
+# Entry point
 # ===========================================================================
 
 if __name__ == "__main__":
     init_alert_db()
     log.info("Grade opportunity scanner starting...")
 
-    # Run immediately on startup
     run_scan()
 
-    # Then schedule hourly
     schedule.every(1).hours.do(run_scan)
 
     while True:
