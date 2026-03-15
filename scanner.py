@@ -6,7 +6,7 @@ import sqlite3
 import logging
 import schedule
 import requests
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 from dotenv import load_dotenv
 from supabase import create_client, Client
 from rapidfuzz import fuzz, process as fuzz_process
@@ -44,6 +44,9 @@ MIN_PROFIT = 50
 # Minimum score for a card to be considered matched
 MIN_MATCH_SCORE = 50
 
+# Minimum match score for TCG (stricter due to more noise)
+MIN_MATCH_SCORE_TCG = 65
+
 # eBay search exclusions
 EXCL = (
     '-"you pick" -"lot of" -"choose your" -"complete your set" -"u pick"'
@@ -53,6 +56,7 @@ EXCL = (
     ' -"pick a card" -"pick your card" -"you choose" -"choose from"'
     ' -"art card" -"fan art" -"custom card" -"custom slab" -"custom art"'
     ' -"uncut" -"panels" -"stamp card" -"holographic"'
+    ' -"tcg pocket" -"pocket" -"japanese" -"chinese" -"korean"'
     ' -PSA -BGS -SGC -CGC -graded -autograph -auto'
     ' -cards'
 )
@@ -66,7 +70,17 @@ EXCL_KEYWORDS = [
     "pick a card", "pick your card", "you choose", "choose from",
     "art card", "fan art", "custom card", "custom slab", "custom art",
     "uncut", "panels", "stamp card", "holographic",
+    # TCG-specific exclusions
+    "tcg pocket", "pocket",
+    # Language exclusions — Japanese/Chinese/Korean cards not in our DB
+    "japanese", "chinese", "korean",
 ]
+
+# Regex pattern for Japanese Pokemon set codes (sv1V, sv2D, SV-P, SV1s, s12a, etc.)
+# These appear in Japanese card listings that don't say "japanese" explicitly
+JAPANESE_SET_CODE_RE = re.compile(
+    r'\b(sv\d+[a-zA-Z]*|SV-P|SV[0-9]+[a-zA-Z]|s\d+[a-zA-Z]|SM\d+|XY\d+|BW\d+)\b'
+)
 
 
 CATEGORIES = {
@@ -135,6 +149,20 @@ logging.basicConfig(
     datefmt="%Y-%m-%d %H:%M:%S"
 )
 log = logging.getLogger(__name__)
+
+# Track scan start time for elapsed logging
+_scan_start_time = None
+
+
+def log_elapsed(message: str):
+    """Log a message prefixed with elapsed time since scan started."""
+    if _scan_start_time is not None:
+        elapsed = time.time() - _scan_start_time
+        mins = int(elapsed // 60)
+        secs = int(elapsed % 60)
+        log.info(f"[+{mins:02d}:{secs:02d}] {message}")
+    else:
+        log.info(message)
 
 # ===========================================================================
 # Supabase
@@ -224,7 +252,6 @@ def search_ebay(category_config: dict, listing_type: str) -> list:
         if listing_type == "bin":
             params["filter"] = "buyingOptions:{FIXED_PRICE},price:[10..],conditionIds:{3000|4000}"
         else:
-            from datetime import timezone, timedelta
             six_hours = (datetime.now(timezone.utc) + timedelta(hours=6)).strftime("%Y-%m-%dT%H:%M:%SZ")
             now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
             params["filter"] = f"buyingOptions:{{AUCTION}},price:[10..],conditionIds:{{3000|4000}},itemEndDate:[{now}..{six_hours}]"
@@ -242,7 +269,7 @@ def search_ebay(category_config: dict, listing_type: str) -> list:
 
         batch = resp.json().get("itemSummaries", [])
         items.extend(batch)
-        log.info(f"  Fetched {len(batch)} {listing_type} items (page {page+1})")
+        log_elapsed(f"Fetched {len(batch)} {listing_type} items (page {page+1})")
         if len(batch) < 100:
             break
 
@@ -260,7 +287,7 @@ def load_gradeable_cards(sport: str, min_year: int = None) -> list:
     if cache_key in _card_cache:
         return _card_cache[cache_key]
 
-    log.info(f"Loading gradeable cards for {sport}...")
+    log_elapsed(f"Loading gradeable cards for {sport}...")
     all_cards = []
     batch_size = 1000
     offset = 0
@@ -302,7 +329,7 @@ def load_gradeable_cards(sport: str, min_year: int = None) -> list:
         except (TypeError, ValueError, ZeroDivisionError):
             continue
 
-    log.info(f"  Loaded {len(all_cards)} cards, {len(filtered)} passed ROI filter for {sport}")
+    log_elapsed(f"Loaded {len(all_cards)} cards, {len(filtered)} passed ROI filter for {sport}")
     _card_cache[cache_key] = filtered
     return filtered
 
@@ -343,10 +370,12 @@ def get_candidate_players(title: str, index: dict) -> list:
 # Set / parallel matching — token-based, driven entirely from DB data
 # ===========================================================================
 
-# Words to strip from set names before tokenizing — these are noise words
-# that appear in nearly every title and add no signal
+# Words to strip from set names before tokenizing — noise words that appear
+# in nearly every title and add no signal.
+# NOTE: "pokemon" is intentionally NOT listed here — it carries real signal
+# in variation names like "Pokemon Center" that we need to match correctly.
 SET_NOISE_WORDS = {
-    "basketball", "football", "baseball", "hockey", "pokemon",
+    "basketball", "football", "baseball", "hockey",
     "trading", "card", "cards", "tcg", "nfl", "nba", "mlb", "nhl",
 }
 
@@ -374,11 +403,9 @@ def set_tokens(set_name: str) -> list:
 def variation_tokens(variation: str) -> list:
     """
     Tokenize a DB variation string.
-    e.g. "Silver Prizm" -> ["silver", "prizm"]
+    e.g. "Silver Prizm"   -> ["silver", "prizm"]
          "Pokemon Center" -> ["pokemon", "center"]
-         "Red White and Blue" -> ["red", "white", "blue"]
     """
-    # Strip very short connector words (and, the, of, etc.) but keep 3+ char tokens
     stop = {"and", "the", "of", "for", "a"}
     return [t for t in tokenize(variation, min_len=2) if t not in stop]
 
@@ -388,8 +415,6 @@ def score_card_match(title_lower: str, card: dict,
                      ebay_card_num: str) -> float:
     """
     Score how well an eBay title matches a specific DB card.
-    Uses actual DB field values directly — no hardcoded keyword lists.
-
     Returns float score (higher = better match).
     Returns -1.0 to hard-reject (year or card# mismatch).
 
@@ -419,65 +444,48 @@ def score_card_match(title_lower: str, card: dict,
 
     # ---------------------------------------------------------------
     # SET NAME matching
-    # Tokenize the DB set name and check how many tokens appear in
-    # the eBay title. These are the actual words from your DB.
     # ---------------------------------------------------------------
     s_tokens = set_tokens(set_name)
     if s_tokens:
         found = [t for t in s_tokens if t in title_lower]
         ratio = len(found) / len(s_tokens)
-        score += ratio * 60  # up to 60 pts
+        score += ratio * 60
 
-        # Full match bonus
         if len(found) == len(s_tokens):
-            score += 20  # up to 80 pts total for set
+            score += 20  # full match bonus
 
-        # Penalty: no set tokens at all in title
         if not found:
-            score -= 20
+            score -= 20  # no set tokens found at all
     else:
-        # Set name had no useful tokens after stripping noise
-        # Give a small neutral score so it isn't hard-penalized
-        score += 10
+        score += 10  # set had no useful tokens after stripping; neutral
 
     # ---------------------------------------------------------------
     # VARIATION matching
-    # For non-base cards: tokenize the DB variation and require those
-    # tokens to appear in the eBay title.
-    # For base cards: penalize if the title contains variation-like tokens
-    # that suggest it's NOT a base card.
     # ---------------------------------------------------------------
     if not is_base:
         v_tokens = variation_tokens(variation)
         if v_tokens:
             found_v = [t for t in v_tokens if t in title_lower]
             ratio_v = len(found_v) / len(v_tokens)
-            score += ratio_v * 60  # up to 60 pts
+            score += ratio_v * 60
 
-            # Full match bonus
             if len(found_v) == len(v_tokens):
-                score += 20  # up to 80 pts total for variation
+                score += 20  # full match bonus
 
             # Hard penalty: variation has tokens but NONE appear in title
-            # e.g. DB is "Silver Prizm" but title says nothing about silver/prizm
-            # e.g. DB is "Pokemon Center" but title has no mention of center
+            # e.g. DB is "Pokemon Center" but title has no mention of "pokemon" or "center"
             if not found_v:
                 score -= 50
 
         else:
-            # Variation string exists but produced no tokens (e.g. "SP")
-            # Do a direct substring check as fallback
+            # Variation string exists but produced no useful tokens (e.g. "SP")
             if variation.lower() in title_lower:
                 score += 20
             else:
                 score -= 10
 
     else:
-        # DB card is base. Check if the title contains tokens from any
-        # known non-base variation in our DB. We do this by tokenizing
-        # the title and looking for words that look like variation markers.
-        # We use a small hardcoded set of the STRONGEST signals only —
-        # words that virtually never appear in a base card title.
+        # DB card is base. Penalize if title looks like it's a parallel.
         STRONG_NON_BASE = {
             "silver", "gold", "refractor", "prizm", "holo", "foil",
             "rainbow", "atomic", "laser", "hyper", "mojo", "cracked",
@@ -488,7 +496,7 @@ def score_card_match(title_lower: str, card: dict,
         title_tokens = set(tokenize(title_lower))
         non_base_hits = title_tokens & STRONG_NON_BASE
         if non_base_hits:
-            score -= 40  # Title looks like a parallel, DB card is base
+            score -= 40
 
     # --- Year match bonus ---
     if set_year and (ebay_year == set_year or ebay_year2 == set_year):
@@ -522,6 +530,35 @@ def parse_grade(title: str) -> str:
 def clean_title(title: str) -> str:
     return re.sub(r'\b(RC|SP|SSP|rookie|card|lot|pack)\b', '', title, flags=re.IGNORECASE).strip()
 
+
+def format_time_remaining(end_time_str: str) -> str:
+    """
+    Parse an eBay itemEndDate string and return a human-readable
+    time-remaining string, e.g. '2h 34m' or '45m 12s'.
+    Returns empty string if parsing fails or time has passed.
+    """
+    if not end_time_str:
+        return ""
+    try:
+        end_time_clean = end_time_str.replace("Z", "+00:00")
+        end_dt = datetime.fromisoformat(end_time_clean)
+        now_dt = datetime.now(timezone.utc)
+        delta  = end_dt - now_dt
+        if delta.total_seconds() <= 0:
+            return "ended"
+        total_secs = int(delta.total_seconds())
+        hours   = total_secs // 3600
+        minutes = (total_secs % 3600) // 60
+        seconds = total_secs % 60
+        if hours > 0:
+            return f"{hours}h {minutes}m"
+        elif minutes > 0:
+            return f"{minutes}m {seconds}s"
+        else:
+            return f"{seconds}s"
+    except Exception:
+        return ""
+
 # ===========================================================================
 # Discord alert
 # ===========================================================================
@@ -547,12 +584,21 @@ def post_discord_alert(card: dict, item: dict, listing_type: str,
     if psa9_mult >= 5.0:
         hard_grade_warning = f"\n⚠️ PSA 9 is {psa9_mult:.1f}x raw — historically difficult to grade"
 
+    # Time remaining for auctions
+    time_remaining_str = ""
+    if listing_type == "auction":
+        end_time = item.get("itemEndDate", "")
+        tr = format_time_remaining(end_time)
+        if tr:
+            time_remaining_str = f"\n⏳ **Time Remaining:** {tr}"
+
     description = (
         f"**eBay:** ${ebay_price:.2f}  ·  "
         f"**DB Raw Median:** ${raw_price:.2f}  ·  "
         f"**Grading Score:** {card['grading_score']:.0f}/100\n"
         f"**PSA 9:** ${psa9:.2f}  ·  **PSA 10:** ${psa10:.2f}\n"
-        f"**Est. Net Profit (PSA 10 via eBay):** ${net_profit:.2f} after ${grade_cost} grading\n"
+        f"**Est. Net Profit (PSA 10 via eBay):** ${net_profit:.2f} after ${grade_cost} grading"
+        f"{time_remaining_str}"
         f"{hard_grade_warning}"
     )
 
@@ -589,12 +635,16 @@ def process_items(items: list, listing_type: str, cards: list,
     if not items:
         return
 
-    log.info(f"Processing {len(items)} {listing_type} items...")
+    is_tcg        = category_config.get("is_tcg", False)
+    min_score     = MIN_MATCH_SCORE_TCG if is_tcg else MIN_MATCH_SCORE
+    section_start = time.time()
+
+    log_elapsed(f"Processing {len(items)} {listing_type} items...")
     alerts_sent = 0
 
     sample_players = list({c["player_name"] for c in cards if c.get("player_name")})[:10]
     log.info(f"  Sample DB players: {sample_players}")
-    raw_titles = [item.get("title","") for item in items if parse_grade(item.get("title","")) == "Raw"]
+    raw_titles = [item.get("title", "") for item in items if parse_grade(item.get("title", "")) == "Raw"]
     log.info(f"  Sample raw eBay titles: {raw_titles[:5]}")
 
     skipped_graded = 0
@@ -621,6 +671,12 @@ def process_items(items: list, listing_type: str, cards: list,
             log.info(f"  NO_CANDIDATE [excl_keyword]: {title}")
             continue
 
+        # For TCG: also skip Japanese set codes even when "japanese" isn't spelled out
+        if is_tcg and JAPANESE_SET_CODE_RE.search(title):
+            no_candidates += 1
+            log.info(f"  NO_CANDIDATE [japanese_set_code]: {title}")
+            continue
+
         # Pre-filter: skip vague titles
         title_words = [w for w in re.split(r'\W+', title) if len(w) >= 4]
         if len(title_words) < 2:
@@ -643,8 +699,7 @@ def process_items(items: list, listing_type: str, cards: list,
                     ebay_year  = (1900 if y1 >= 90 else 2000) + y1
                     ebay_year2 = 2000 + y2
 
-        # Must have year OR card# to be trustworthy (skip for TCGs)
-        is_tcg = category_config.get("is_tcg", False)
+        # Must have year OR card# to be trustworthy (waived for TCGs)
         if not is_tcg and not ebay_year and not ebay_card_num:
             no_candidates += 1
             log.info(f"  NO_CANDIDATE [no_year_or_cardnum]: {title}")
@@ -666,7 +721,7 @@ def process_items(items: list, listing_type: str, cards: list,
             no_player += 1
             continue
 
-        # Step 4: score each card using brand + parallel keyword matching
+        # Step 4: score each card
         title_lower  = title.lower()
         matched_card = None
         best_score   = 0.0
@@ -683,7 +738,7 @@ def process_items(items: list, listing_type: str, cards: list,
                 best_score   = s
                 matched_card = card
 
-        if not matched_card or best_score < MIN_MATCH_SCORE:
+        if not matched_card or best_score < min_score:
             no_card += 1
             log.info(
                 f"  NO_CARD: \"{title}\" -> player={matched_player} "
@@ -692,7 +747,7 @@ def process_items(items: list, listing_type: str, cards: list,
             continue
 
         matched_canonical = matched_card["canonical_name"]
-        log.info(
+        log_elapsed(
             f"CARD MATCH: \"{title}\" -> {matched_canonical} "
             f"(score={best_score:.0f} variation={matched_card.get('variation') or 'base'})"
         )
@@ -709,7 +764,7 @@ def process_items(items: list, listing_type: str, cards: list,
         # Step 6: check price threshold
         if price > raw_median * PRICE_THRESHOLD:
             price_too_high += 1
-            log.info(
+            log_elapsed(
                 f"  PRICE SKIP: eBay ${price:.2f} > threshold "
                 f"${raw_median * PRICE_THRESHOLD:.2f} (median ${raw_median:.2f})"
             )
@@ -720,7 +775,7 @@ def process_items(items: list, listing_type: str, cards: list,
         net_profit = psa10 - price - 27.99
         if net_profit < MIN_PROFIT:
             low_profit += 1
-            log.info(f"  PROFIT SKIP: net profit ${net_profit:.2f} < min ${MIN_PROFIT}")
+            log_elapsed(f"  PROFIT SKIP: net profit ${net_profit:.2f} < min ${MIN_PROFIT}")
             continue
 
         # Step 8: skip if already alerted
@@ -728,19 +783,29 @@ def process_items(items: list, listing_type: str, cards: list,
         if has_alerted(url):
             continue
 
-        log.info(
+        # Time remaining for auctions (for logging)
+        time_remaining_log = ""
+        if listing_type == "auction":
+            end_time = item.get("itemEndDate", "")
+            tr = format_time_remaining(end_time)
+            if tr:
+                time_remaining_log = f" | Time remaining: {tr}"
+
+        log_elapsed(
             f"DEAL: {matched_canonical} | eBay: ${price:.2f} | "
             f"Raw median: ${raw_median:.2f} | PSA10: ${psa10:.2f} | "
-            f"Profit: ${net_profit:.2f}"
+            f"Profit: ${net_profit:.2f}{time_remaining_log}"
         )
 
         record_alert(url)
         post_discord_alert(matched_card, item, listing_type, price, category_config)
         alerts_sent += 1
-        time.sleep(0.5)  # small delay between Discord posts
+        time.sleep(0.5)
 
-    log.info(
-        f"  Sent {alerts_sent} alerts for {listing_type} | "
+    elapsed_sec = time.time() - section_start
+    log_elapsed(
+        f"Sent {alerts_sent} alerts for {listing_type} "
+        f"[{elapsed_sec:.1f}s] | "
         f"graded={skipped_graded} no_candidates={no_candidates} "
         f"no_player={no_player} no_card={no_card} "
         f"price_high={price_too_high} low_profit={low_profit}"
@@ -751,6 +816,9 @@ def process_items(items: list, listing_type: str, cards: list,
 # ===========================================================================
 
 def run_scan():
+    global _scan_start_time
+    _scan_start_time = time.time()
+
     log.info("=" * 60)
     log.info(f"Starting scan — {datetime.utcnow().isoformat()}")
     log.info("=" * 60)
@@ -759,13 +827,13 @@ def run_scan():
     _card_cache.clear()
 
     for cat_name, cat_config in CATEGORIES.items():
-        log.info(f"\n--- Scanning {cat_name} ---")
-        time.sleep(5)  # pause between sports
+        log_elapsed(f"\n--- Scanning {cat_name} ---")
+        time.sleep(5)
 
         try:
             cards = load_gradeable_cards(cat_config["sport"], min_year=cat_config.get("min_year"))
             if not cards:
-                log.info(f"No gradeable cards found for {cat_name}, skipping")
+                log_elapsed(f"No gradeable cards found for {cat_name}, skipping")
                 continue
 
             player_index = build_player_index(cards)
@@ -780,7 +848,8 @@ def run_scan():
             log.error(f"Error scanning {cat_name}: {e}", exc_info=True)
             continue
 
-    log.info("\nScan complete")
+    total_elapsed = time.time() - _scan_start_time
+    log.info(f"\nScan complete — total time: {total_elapsed:.1f}s ({total_elapsed/60:.1f}m)")
 
 # ===========================================================================
 # Entry point — runs once immediately then hourly
