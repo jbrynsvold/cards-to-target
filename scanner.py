@@ -503,11 +503,12 @@ def score_card_match(title_lower: str, card: dict,
         v_tokens = variation_tokens(variation)
         if v_tokens:
             found_v = [t for t in v_tokens if t in title_lower]
-            score += (len(found_v) / len(v_tokens)) * 60
+            ratio_v = len(found_v) / len(v_tokens)
+            if ratio_v < 0.5:
+                return -1.0
+            score += ratio_v * 60
             if len(found_v) == len(v_tokens):
                 score += 20
-            if not found_v:
-                score -= 50
         else:
             if variation.lower() in title_lower:
                 score += 20
