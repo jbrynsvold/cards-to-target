@@ -9,7 +9,7 @@ import requests
 from datetime import datetime, timezone, timedelta
 from dotenv import load_dotenv
 from supabase import create_client, Client
-from rapidfuzz import fuzz, process as fuzz_process
+from rapidfuzz import fuzz
 
 load_dotenv()
 
@@ -23,29 +23,30 @@ SUPABASE_URL       = os.getenv("SUPABASE_URL")
 SUPABASE_KEY       = os.getenv("SUPABASE_KEY")
 DISCORD_WEBHOOK    = os.getenv("DISCORD_WEBHOOK_GRADE_ALERTS")
 
-EBAY_TOKEN_URL = "https://api.ebay.com/identity/v1/oauth2/token"
+EBAY_TOKEN_URL  = "https://api.ebay.com/identity/v1/oauth2/token"
 EBAY_SEARCH_URL = "https://api.ebay.com/buy/browse/v1/item_summary/search"
-EBAY_SCOPE = "https://api.ebay.com/oauth/api_scope"
+EBAY_SCOPE      = "https://api.ebay.com/oauth/api_scope"
 
 # Price threshold: alert if eBay listing <= raw_price * this multiplier
 PRICE_THRESHOLD = 1.25
 
 # ROI-based card inclusion filters
-MIN_ROI_MULTIPLE  = 2.5   # psa10 / (raw + grading_cost) must be >= this
-MAX_ROI_MULTIPLE  = 500   # cap outliers with bad data
-MIN_NET_PROFIT    = 20    # psa10 - raw - grading_cost must be >= this
-MIN_RAW_SALES_30D = 5     # minimum raw sales in last 30 days
-MIN_PSA10_SALES   = 2     # psa10 must have sold at least this many times
-GRADING_COST      = 28    # assumed grading cost per card
+MIN_ROI_MULTIPLE  = 2.5
+MAX_ROI_MULTIPLE  = 500
+MIN_NET_PROFIT    = 20
+MIN_RAW_SALES_30D = 5
+MIN_PSA10_SALES   = 2
+GRADING_COST      = 28
 
 # Minimum PSA 10 profit after grading to alert
 MIN_PROFIT = 50
 
 # Minimum score for a card to be considered matched
-MIN_MATCH_SCORE = 50
-
-# Minimum match score for TCG (stricter due to more noise)
+MIN_MATCH_SCORE     = 50
 MIN_MATCH_SCORE_TCG = 65
+
+# Minimum word length for player name index
+MIN_WORD_LEN = 4
 
 # eBay search exclusions
 EXCL = (
@@ -61,7 +62,6 @@ EXCL = (
     ' -cards'
 )
 
-# Python-side exclusion filter
 EXCL_KEYWORDS = [
     "you pick", "lot of", "choose your", "complete your set", "u pick",
     "card lot", "pack of", "box of", "blaster", "hobby box",
@@ -70,18 +70,53 @@ EXCL_KEYWORDS = [
     "pick a card", "pick your card", "you choose", "choose from",
     "art card", "fan art", "custom card", "custom slab", "custom art",
     "uncut", "panels", "stamp card", "holographic",
-    # TCG-specific exclusions
     "tcg pocket", "pocket",
-    # Language exclusions — Japanese/Chinese/Korean cards not in our DB
     "japanese", "chinese", "korean",
 ]
 
-# Regex pattern for Japanese Pokemon set codes (sv1V, sv2D, SV-P, SV1s, s12a, etc.)
-# These appear in Japanese card listings that don't say "japanese" explicitly
 JAPANESE_SET_CODE_RE = re.compile(
     r'\b(sv\d+[a-zA-Z]*|SV-P|SV[0-9]+[a-zA-Z]|s\d+[a-zA-Z]|SM\d+|XY\d+|BW\d+)\b'
 )
 
+TEAM_NAMES = {
+    # MLB
+    "Baltimore Orioles", "Boston Red Sox", "New York Yankees", "Los Angeles Dodgers",
+    "Chicago Cubs", "Houston Astros", "Atlanta Braves", "San Francisco Giants",
+    "St. Louis Cardinals", "Philadelphia Phillies", "New York Mets", "Los Angeles Angels",
+    "Seattle Mariners", "Toronto Blue Jays", "Tampa Bay Rays", "Minnesota Twins",
+    "Cleveland Guardians", "Detroit Tigers", "Kansas City Royals", "Chicago White Sox",
+    "Texas Rangers", "Oakland Athletics", "San Diego Padres", "Colorado Rockies",
+    "Arizona Diamondbacks", "Miami Marlins", "Pittsburgh Pirates", "Cincinnati Reds",
+    "Milwaukee Brewers", "Washington Nationals",
+    # NBA
+    "Los Angeles Lakers", "Boston Celtics", "Chicago Bulls", "Golden State Warriors",
+    "Miami Heat", "San Antonio Spurs", "Dallas Mavericks", "Phoenix Suns",
+    "Denver Nuggets", "Milwaukee Bucks", "Brooklyn Nets", "Philadelphia 76ers",
+    "Toronto Raptors", "New York Knicks", "Cleveland Cavaliers", "Oklahoma City Thunder",
+    "Memphis Grizzlies", "New Orleans Pelicans", "Sacramento Kings", "Utah Jazz",
+    "Portland Trail Blazers", "Indiana Pacers", "Atlanta Hawks", "Charlotte Hornets",
+    "Detroit Pistons", "Washington Wizards", "Orlando Magic", "Minnesota Timberwolves",
+    "Houston Rockets", "Los Angeles Clippers",
+    # NFL
+    "Kansas City Chiefs", "San Francisco 49ers", "Dallas Cowboys", "New England Patriots",
+    "Green Bay Packers", "Pittsburgh Steelers", "Baltimore Ravens", "Buffalo Bills",
+    "Philadelphia Eagles", "Cincinnati Bengals", "Los Angeles Rams", "Miami Dolphins",
+    "Las Vegas Raiders", "Denver Broncos", "Seattle Seahawks", "Tampa Bay Buccaneers",
+    "New Orleans Saints", "Minnesota Vikings", "Chicago Bears", "New York Giants",
+    "New York Jets", "Washington Commanders", "Carolina Panthers", "Atlanta Falcons",
+    "Detroit Lions", "Arizona Cardinals", "Los Angeles Chargers", "Indianapolis Colts",
+    "Tennessee Titans", "Jacksonville Jaguars", "Cleveland Browns", "Houston Texans",
+    # NHL
+    "Toronto Maple Leafs", "Montreal Canadiens", "Boston Bruins", "New York Rangers",
+    "Chicago Blackhawks", "Detroit Red Wings", "Philadelphia Flyers", "Edmonton Oilers",
+    "Pittsburgh Penguins", "Colorado Avalanche", "Tampa Bay Lightning", "Vegas Golden Knights",
+    "Carolina Hurricanes", "Florida Panthers", "New York Islanders", "Washington Capitals",
+    "Minnesota Wild", "St. Louis Blues", "Nashville Predators", "Winnipeg Jets",
+    "Calgary Flames", "Vancouver Canucks", "Ottawa Senators", "Buffalo Sabres",
+    "New Jersey Devils", "Columbus Blue Jackets", "San Jose Sharks", "Anaheim Ducks",
+    "Seattle Kraken", "Dallas Stars", "Arizona Coyotes", "Quebec Nordiques",
+    "Hartford Whalers", "Atlanta Thrashers",
+}
 
 CATEGORIES = {
     "NFL": {
@@ -118,7 +153,6 @@ CATEGORIES = {
     },
     "Pokemon": {
         "sport":         "Pokemon",
-        # Explicitly require "pokemon" and exclude other TCG games sharing category 183454
         "ebay_query":    f'pokemon -"magic the gathering" -MTG -yugioh -lorcana -"one piece" -"dragon ball" -vanguard {EXCL}',
         "ebay_category": "183454",
         "aspect_filter": "categoryId:183454,Graded:{No}",
@@ -146,16 +180,13 @@ CATEGORIES = {
 logging.basicConfig(
     level=logging.INFO,
     format="[%(asctime)s] %(levelname)s %(message)s",
-    datefmt="%Y-%m-%d %H:%M:%S"
+    datefmt="%Y-%m-%d %H:%M:%S",
 )
 log = logging.getLogger(__name__)
 
-# Track scan start time for elapsed logging
 _scan_start_time = None
 
-
 def log_elapsed(message: str):
-    """Log a message prefixed with elapsed time since scan started."""
     if _scan_start_time is not None:
         elapsed = time.time() - _scan_start_time
         mins = int(elapsed // 60)
@@ -171,7 +202,7 @@ def log_elapsed(message: str):
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 # ===========================================================================
-# Local SQLite alert log (prevents duplicate alerts)
+# SQLite alert log
 # ===========================================================================
 
 def init_alert_db():
@@ -195,16 +226,16 @@ def record_alert(url: str):
     conn = sqlite3.connect("alerts.db")
     conn.execute(
         "INSERT OR IGNORE INTO alert_log (item_url, alerted_at) VALUES (?, ?)",
-        (url, datetime.utcnow().isoformat())
+        (url, datetime.now(timezone.utc).isoformat())
     )
     conn.commit()
     conn.close()
 
 # ===========================================================================
-# eBay OAuth token (cached)
+# eBay token
 # ===========================================================================
 
-_ebay_token = None
+_ebay_token        = None
 _ebay_token_expiry = 0
 
 def get_ebay_token() -> str:
@@ -212,7 +243,9 @@ def get_ebay_token() -> str:
     if _ebay_token and time.time() < _ebay_token_expiry:
         return _ebay_token
 
-    auth = base64.b64encode(f"{EBAY_CLIENT_ID}:{EBAY_CLIENT_SECRET}".encode()).decode()
+    auth = base64.b64encode(
+        f"{EBAY_CLIENT_ID}:{EBAY_CLIENT_SECRET}".encode()
+    ).decode()
     resp = requests.post(
         EBAY_TOKEN_URL,
         headers={
@@ -223,7 +256,7 @@ def get_ebay_token() -> str:
     )
     resp.raise_for_status()
     data = resp.json()
-    _ebay_token = data["access_token"]
+    _ebay_token        = data["access_token"]
     _ebay_token_expiry = time.time() + data["expires_in"] - 60
     log.info("Got new eBay token")
     return _ebay_token
@@ -233,7 +266,6 @@ def get_ebay_token() -> str:
 # ===========================================================================
 
 def search_ebay(category_config: dict, listing_type: str) -> list:
-    """Search eBay using Browse API. listing_type: 'bin' or 'auction'"""
     token = get_ebay_token()
     items = []
 
@@ -253,13 +285,13 @@ def search_ebay(category_config: dict, listing_type: str) -> list:
             params["filter"] = "buyingOptions:{FIXED_PRICE},price:[10..],conditionIds:{3000|4000}"
         else:
             six_hours = (datetime.now(timezone.utc) + timedelta(hours=6)).strftime("%Y-%m-%dT%H:%M:%SZ")
-            now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-            params["filter"] = f"buyingOptions:{{AUCTION}},price:[10..],conditionIds:{{3000|4000}},itemEndDate:[{now}..{six_hours}]"
+            now_str   = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+            params["filter"] = f"buyingOptions:{{AUCTION}},price:[10..],conditionIds:{{3000|4000}},itemEndDate:[{now_str}..{six_hours}]"
 
         time.sleep(1)
         resp = requests.get(
             EBAY_SEARCH_URL,
-            headers={"Authorization": f"Bearer {token}", "X-EBAY-C-MARKETPLACE-ID": "EBAY_US"},
+            headers={"Authorization": f"Bearer {get_ebay_token()}", "X-EBAY-C-MARKETPLACE-ID": "EBAY_US"},
             params=params,
         )
 
@@ -276,13 +308,12 @@ def search_ebay(category_config: dict, listing_type: str) -> list:
     return items
 
 # ===========================================================================
-# Load gradeable cards from Supabase
+# Load gradeable cards
 # ===========================================================================
 
-_card_cache = {}  # sport -> list of card dicts
+_card_cache = {}
 
 def load_gradeable_cards(sport: str, min_year: int = None) -> list:
-    """Load cards passing ROI filter for a given sport."""
     cache_key = f"{sport}:{min_year}"
     if cache_key in _card_cache:
         return _card_cache[cache_key]
@@ -314,7 +345,6 @@ def load_gradeable_cards(sport: str, min_year: int = None) -> list:
             break
         offset += batch_size
 
-    # Apply ROI filters in Python (PostgREST can't do arithmetic filters)
     filtered = []
     for c in all_cards:
         try:
@@ -334,7 +364,7 @@ def load_gradeable_cards(sport: str, min_year: int = None) -> list:
     return filtered
 
 # ===========================================================================
-# Player name matching
+# Player name index — two-stage (inverted index + partial_ratio)
 # ===========================================================================
 
 SUFFIX_RE = re.compile(r'\b(II|III|IV|Jr\.?|Sr\.?)$', re.IGNORECASE)
@@ -342,175 +372,163 @@ SUFFIX_RE = re.compile(r'\b(II|III|IV|Jr\.?|Sr\.?)$', re.IGNORECASE)
 def strip_suffix(name: str) -> str:
     return SUFFIX_RE.sub('', name).strip()
 
-def build_player_index(cards: list) -> dict:
-    """Build cleaned_name -> original_name lookup for partial_ratio matching."""
-    index = {}
-    seen = set()
-    for card in cards:
-        name = card.get("player_name", "")
-        if not name or name in seen:
+# sport -> { word -> set(player_names) }
+_word_to_players: dict = {}
+# sport -> { cleaned_name -> original_name }
+_cleaned_to_original: dict = {}
+_player_index_loaded: set = set()
+
+def load_player_index(sport: str):
+    if sport in _player_index_loaded:
+        return
+
+    log.info(f"Loading {sport} player names...")
+    result = supabase.table("player_name_index") \
+        .select("player_name") \
+        .eq("sport", sport) \
+        .limit(50000) \
+        .execute()
+    all_names = [r["player_name"] for r in (result.data or []) if r.get("player_name")]
+
+    word_map    = {}
+    cleaned_map = {}
+    seen        = set()
+
+    for name in all_names:
+        if name in seen:
             continue
         seen.add(name)
         cleaned = strip_suffix(name).lower()
-        index[cleaned] = name
-    return index
+        cleaned_map[cleaned] = name
+        for word in cleaned.split():
+            if len(word) >= MIN_WORD_LEN:
+                word_map.setdefault(word, set()).add(name)
 
-def get_candidate_players(title: str, index: dict) -> list:
-    """Find players whose name appears in the eBay title using partial_ratio."""
+    _word_to_players[sport]     = word_map
+    _cleaned_to_original[sport] = cleaned_map
+    _player_index_loaded.add(sport)
+    log.info(f"{sport}: loaded {len(cleaned_map)} players, {len(word_map)} index words")
+
+
+def get_candidate_players(title: str, sport: str) -> list:
+    """Two-stage: fast inverted index then partial_ratio on small candidate set."""
     title_lower = title.lower()
+    word_map    = _word_to_players.get(sport, {})
+
+    title_words   = [w for w in re.split(r'\W+', title_lower) if len(w) >= MIN_WORD_LEN]
+    candidate_set = set()
+    for word in title_words:
+        for player in word_map.get(word, []):
+            candidate_set.add(player)
+
+    if not candidate_set:
+        return []
+
     matches = []
-    for cleaned_name, original_name in index.items():
-        score = fuzz.partial_ratio(cleaned_name, title_lower)
+    for original_name in candidate_set:
+        if original_name in TEAM_NAMES:
+            continue
+        cleaned = strip_suffix(original_name).lower()
+        score   = fuzz.partial_ratio(cleaned, title_lower)
         if score >= 92:
             matches.append((original_name, score))
+
     matches.sort(key=lambda x: -x[1])
     return [m[0] for m in matches]
 
 # ===========================================================================
-# Set / parallel matching — token-based, driven entirely from DB data
+# Set / variation token matching
 # ===========================================================================
 
-# Words to strip from set names before tokenizing — noise words that appear
-# in nearly every title and add no signal.
-# NOTE: "pokemon" is intentionally NOT listed here — it carries real signal
-# in variation names like "Pokemon Center" that we need to match correctly.
 SET_NOISE_WORDS = {
     "basketball", "football", "baseball", "hockey",
     "trading", "card", "cards", "tcg", "nfl", "nba", "mlb", "nhl",
 }
 
-# Variation values that mean "base card" — no variation token checking needed
 BASE_VARIATIONS = {"", "base", "none", "base card", "n/a"}
 
+STRONG_NON_BASE = {
+    "silver", "gold", "refractor", "prizm", "holo", "foil",
+    "rainbow", "atomic", "laser", "hyper", "mojo", "cracked",
+    "shimmer", "wave", "pulsar", "disco", "glossy", "lazer",
+    "stamped", "prerelease", "shadowless", "cosmos",
+    "reverse", "fullart", "altart", "promo",
+}
 
 def tokenize(text: str, min_len: int = 3) -> list:
-    """Split text into lowercase tokens, filtering short/noise words."""
-    return [
-        w.lower() for w in re.split(r'[\W_]+', text)
-        if len(w) >= min_len
-    ]
-
+    return [w.lower() for w in re.split(r'[\W_]+', text) if len(w) >= min_len]
 
 def set_tokens(set_name: str) -> list:
-    """
-    Tokenize a DB set name, removing noise words.
-    e.g. "Panini Prizm Football" -> ["panini", "prizm"]
-    """
-    tokens = tokenize(set_name)
-    return [t for t in tokens if t not in SET_NOISE_WORDS]
-
+    return [t for t in tokenize(set_name) if t not in SET_NOISE_WORDS]
 
 def variation_tokens(variation: str) -> list:
-    """
-    Tokenize a DB variation string.
-    e.g. "Silver Prizm"   -> ["silver", "prizm"]
-         "Pokemon Center" -> ["pokemon", "center"]
-    """
     stop = {"and", "the", "of", "for", "a"}
     return [t for t in tokenize(variation, min_len=2) if t not in stop]
-
 
 def score_card_match(title_lower: str, card: dict,
                      ebay_year: int, ebay_year2: int,
                      ebay_card_num: str) -> float:
-    """
-    Score how well an eBay title matches a specific DB card.
-    Returns float score (higher = better match).
-    Returns -1.0 to hard-reject (year or card# mismatch).
-
-    Scoring breakdown:
-      Set name token match  : up to 80 pts
-      Variation token match : up to 80 pts  (non-base cards)
-      Base card protection  : -40 pts penalty if base but title has variation tokens
-      Year match bonus      : 10 pts
-    """
     set_year    = int(card["set_year"]) if card.get("set_year") else None
     db_card_num = str(card.get("card_number") or "").lstrip("0")
     set_name    = (card.get("set_name") or "")
     variation   = (card.get("variation") or "").strip()
     is_base     = variation.lower() in BASE_VARIATIONS
 
-    # --- Hard filter: year ---
+    # Hard filter: year
     if set_year and (ebay_year or ebay_year2):
         if ebay_year != set_year and ebay_year2 != set_year:
             return -1.0
 
-    # --- Hard filter: card number ---
+    # Hard filter: card number
     if ebay_card_num and db_card_num:
         if ebay_card_num != db_card_num:
             return -1.0
 
     score = 0.0
 
-    # ---------------------------------------------------------------
-    # SET NAME matching
-    # ---------------------------------------------------------------
+    # Set name matching
     s_tokens = set_tokens(set_name)
     if s_tokens:
         found = [t for t in s_tokens if t in title_lower]
-        ratio = len(found) / len(s_tokens)
-        score += ratio * 60
-
+        score += (len(found) / len(s_tokens)) * 60
         if len(found) == len(s_tokens):
-            score += 20  # full match bonus
-
+            score += 20
         if not found:
-            score -= 20  # no set tokens found at all
+            score -= 20
     else:
-        score += 10  # set had no useful tokens after stripping; neutral
+        score += 10
 
-    # ---------------------------------------------------------------
-    # VARIATION matching
-    # ---------------------------------------------------------------
+    # Variation matching
     if not is_base:
         v_tokens = variation_tokens(variation)
         if v_tokens:
             found_v = [t for t in v_tokens if t in title_lower]
-            ratio_v = len(found_v) / len(v_tokens)
-            score += ratio_v * 60
-
+            score += (len(found_v) / len(v_tokens)) * 60
             if len(found_v) == len(v_tokens):
-                score += 20  # full match bonus
-
-            # Hard penalty: variation has tokens but NONE appear in title
-            # e.g. DB is "Pokemon Center" but title has no mention of "pokemon" or "center"
+                score += 20
             if not found_v:
                 score -= 50
-
         else:
-            # Variation string exists but produced no useful tokens (e.g. "SP")
             if variation.lower() in title_lower:
                 score += 20
             else:
                 score -= 10
-
     else:
-        # DB card is base. Penalize if title looks like it's a parallel.
-        STRONG_NON_BASE = {
-            "silver", "gold", "refractor", "prizm", "holo", "foil",
-            "rainbow", "atomic", "laser", "hyper", "mojo", "cracked",
-            "shimmer", "wave", "pulsar", "disco", "glossy",
-            "stamped", "prerelease", "shadowless", "cosmos",
-            "reverse", "fullart", "altart", "promo",
-        }
         title_tokens = set(tokenize(title_lower))
-        non_base_hits = title_tokens & STRONG_NON_BASE
-        if non_base_hits:
+        if title_tokens & STRONG_NON_BASE:
             score -= 40
 
-    # --- Year match bonus ---
+    # Year bonus
     if set_year and (ebay_year == set_year or ebay_year2 == set_year):
         score += 10
 
     return score
 
-
 # ===========================================================================
-# Title parsing helpers
+# Title parsing
 # ===========================================================================
 
 def parse_grade(title: str) -> str:
-    """Return grader+grade if present, else 'Raw'."""
     GRADERS = (
         "PSA|BGS|SGC|CGC|CSG|HGA|GAI|GMA|KSA|WCG|BVG|CCG|CGA|CCA|OCE|"
         "PGS|OCG|AGS|TAG|ISA|BCCG|GAS|PTA|DGA|AFA|MNT|GEM MINT"
@@ -527,29 +545,47 @@ def parse_grade(title: str) -> str:
         return "Graded"
     return "Raw"
 
-def clean_title(title: str) -> str:
-    return re.sub(r'\b(RC|SP|SSP|rookie|card|lot|pack)\b', '', title, flags=re.IGNORECASE).strip()
+
+def parse_title_years(title: str):
+    """Extract ebay_year, ebay_year2, ebay_card_num from an eBay title."""
+    ebay_year  = None
+    ebay_year2 = None
+
+    full_year = re.search(r'\b(19|20)\d{2}\b', title)
+    if full_year:
+        ebay_year = int(full_year.group())
+        # Handle hockey-style 1995-96 hyphenated years
+        hockey_year = re.search(r'\b(19|20)(\d{2})-(\d{2})\b', title)
+        if hockey_year:
+            suffix = int(hockey_year.group(3))
+            ebay_year2 = 2000 + suffix if suffix <= 30 else 1900 + suffix
+    else:
+        short = re.search(r'\b(\d{2})-(\d{2})\b', title)
+        if short:
+            y1, y2 = int(short.group(1)), int(short.group(2))
+            if (y1 >= 90 or y1 <= 26) and (y2 >= 90 or y2 <= 26):
+                ebay_year  = (1900 if y1 >= 90 else 2000) + y1
+                ebay_year2 = 2000 + y2
+
+    card_num_match = re.search(r'#\s*(\w+)', title)
+    ebay_card_num  = card_num_match.group(1).lstrip('0') if card_num_match else None
+
+    return ebay_year, ebay_year2, ebay_card_num
 
 
 def format_time_remaining(end_time_str: str) -> str:
-    """
-    Parse an eBay itemEndDate string and return a human-readable
-    time-remaining string, e.g. '2h 34m' or '45m 12s'.
-    Returns empty string if parsing fails or time has passed.
-    """
     if not end_time_str:
         return ""
     try:
-        end_time_clean = end_time_str.replace("Z", "+00:00")
-        end_dt = datetime.fromisoformat(end_time_clean)
-        now_dt = datetime.now(timezone.utc)
-        delta  = end_dt - now_dt
+        end_dt     = datetime.fromisoformat(end_time_str.replace("Z", "+00:00"))
+        now_dt     = datetime.now(timezone.utc)
+        delta      = end_dt - now_dt
         if delta.total_seconds() <= 0:
             return "ended"
         total_secs = int(delta.total_seconds())
-        hours   = total_secs // 3600
-        minutes = (total_secs % 3600) // 60
-        seconds = total_secs % 60
+        hours      = total_secs // 3600
+        minutes    = (total_secs % 3600) // 60
+        seconds    = total_secs % 60
         if hours > 0:
             return f"{hours}h {minutes}m"
         elif minutes > 0:
@@ -560,7 +596,7 @@ def format_time_remaining(end_time_str: str) -> str:
         return ""
 
 # ===========================================================================
-# Discord alert
+# Discord
 # ===========================================================================
 
 def post_discord_alert(card: dict, item: dict, listing_type: str,
@@ -572,7 +608,7 @@ def post_discord_alert(card: dict, item: dict, listing_type: str,
     raw_price  = float(card["raw_price"])
     psa10      = float(card["psa10_price"])
     psa9       = float(card.get("psa9_price") or 0)
-    grade_cost = 27.99  # PSA Value tier default
+    grade_cost = 27.99
     net_profit = psa10 - ebay_price - grade_cost
     psa9_mult  = float(card.get("raw_to_psa9_mult") or 0)
 
@@ -584,11 +620,9 @@ def post_discord_alert(card: dict, item: dict, listing_type: str,
     if psa9_mult >= 5.0:
         hard_grade_warning = f"\n⚠️ PSA 9 is {psa9_mult:.1f}x raw — historically difficult to grade"
 
-    # Time remaining for auctions
     time_remaining_str = ""
     if listing_type == "auction":
-        end_time = item.get("itemEndDate", "")
-        tr = format_time_remaining(end_time)
+        tr = format_time_remaining(item.get("itemEndDate", ""))
         if tr:
             time_remaining_str = f"\n⏳ **Time Remaining:** {tr}"
 
@@ -627,11 +661,11 @@ def post_discord_alert(card: dict, item: dict, listing_type: str,
         log.error(f"Discord webhook error: {resp.status_code} {resp.text}")
 
 # ===========================================================================
-# Process items for one category
+# Process items
 # ===========================================================================
 
 def process_items(items: list, listing_type: str, cards: list,
-                  player_index: dict, category_config: dict):
+                  sport: str, category_config: dict):
     if not items:
         return
 
@@ -640,12 +674,6 @@ def process_items(items: list, listing_type: str, cards: list,
     section_start = time.time()
 
     log_elapsed(f"Processing {len(items)} {listing_type} items...")
-    alerts_sent = 0
-
-    sample_players = list({c["player_name"] for c in cards if c.get("player_name")})[:10]
-    log.info(f"  Sample DB players: {sample_players}")
-    raw_titles = [item.get("title", "") for item in items if parse_grade(item.get("title", "")) == "Raw"]
-    log.info(f"  Sample raw eBay titles: {raw_titles[:5]}")
 
     skipped_graded = 0
     no_candidates  = 0
@@ -653,106 +681,77 @@ def process_items(items: list, listing_type: str, cards: list,
     no_card        = 0
     price_too_high = 0
     low_profit     = 0
+    alerts_sent    = 0
 
     for item in items:
         title = item.get("title", "")
         if not title:
             continue
 
-        # Skip graded listings
         if parse_grade(title) != "Raw":
             skipped_graded += 1
             continue
 
-        # Python-side exclusion filter
         title_lower_excl = title.lower()
         if any(kw in title_lower_excl for kw in EXCL_KEYWORDS):
             no_candidates += 1
-            log.info(f"  NO_CANDIDATE [excl_keyword]: {title}")
             continue
 
-        # For TCG: also skip Japanese set codes even when "japanese" isn't spelled out
         if is_tcg and JAPANESE_SET_CODE_RE.search(title):
             no_candidates += 1
-            log.info(f"  NO_CANDIDATE [japanese_set_code]: {title}")
             continue
 
-        # Pre-filter: skip vague titles
         title_words = [w for w in re.split(r'\W+', title) if len(w) >= 4]
         if len(title_words) < 2:
             no_candidates += 1
-            log.info(f"  NO_CANDIDATE [vague_title]: {title}")
             continue
 
-        # Extract year and card# from title
-        ebay_card_match = re.search(r'#\s*(\w+)', title)
-        ebay_card_num   = ebay_card_match.group(1).lstrip('0') if ebay_card_match else None
-        full_year_match = re.search(r'\b(19|20)\d{2}\b', title)
-        ebay_year, ebay_year2 = None, None
-        if full_year_match:
-            ebay_year = int(full_year_match.group())
-        else:
-            short_match = re.search(r'\b(\d{2})-(\d{2})\b', title)
-            if short_match:
-                y1, y2 = int(short_match.group(1)), int(short_match.group(2))
-                if (y1 >= 90 or y1 <= 26) and (y2 >= 90 or y2 <= 26):
-                    ebay_year  = (1900 if y1 >= 90 else 2000) + y1
-                    ebay_year2 = 2000 + y2
+        ebay_year, ebay_year2, ebay_card_num = parse_title_years(title)
 
-        # Must have year OR card# to be trustworthy (waived for TCGs)
         if not is_tcg and not ebay_year and not ebay_card_num:
             no_candidates += 1
-            log.info(f"  NO_CANDIDATE [no_year_or_cardnum]: {title}")
+            log_elapsed(f"NO_CANDIDATE [no_year_or_cardnum]: {title}")
             continue
 
-        # Step 1: find candidate players from title
-        candidates = get_candidate_players(title, player_index)
+        # Two-stage player matching
+        candidates = get_candidate_players(title, sport)
         if not candidates:
             no_candidates += 1
-            log.info(f"  NO_CANDIDATE [no_player_match]: {title}")
+            log_elapsed(f"NO_CANDIDATE [no_player_match]: {title}")
             continue
 
-        # Step 2: best player match
         matched_player = candidates[0]
 
-        # Step 3: get cards for this player
         player_cards = [c for c in cards if c.get("player_name") == matched_player]
         if not player_cards:
             no_player += 1
             continue
 
-        # Step 4: score each card
         title_lower  = title.lower()
         matched_card = None
         best_score   = 0.0
 
         for card in player_cards:
-            s = score_card_match(
-                title_lower, card,
-                ebay_year, ebay_year2,
-                ebay_card_num
-            )
+            s = score_card_match(title_lower, card, ebay_year, ebay_year2, ebay_card_num)
             if s < 0:
-                continue  # hard-rejected
+                continue
             if s > best_score:
                 best_score   = s
                 matched_card = card
 
         if not matched_card or best_score < min_score:
             no_card += 1
-            log.info(
-                f"  NO_CARD: \"{title}\" -> player={matched_player} "
+            log_elapsed(
+                f"NO_CARD: \"{title}\" -> player={matched_player} "
                 f"best_score={best_score:.0f} cards_checked={len(player_cards)}"
             )
             continue
 
-        matched_canonical = matched_card["canonical_name"]
         log_elapsed(
-            f"CARD MATCH: \"{title}\" -> {matched_canonical} "
+            f"CARD MATCH: \"{title}\" -> {matched_card['canonical_name']} "
             f"(score={best_score:.0f} variation={matched_card.get('variation') or 'base'})"
         )
 
-        # Step 5: get eBay price
         price = float(item.get("price", {}).get("value", 0))
         if price <= 0:
             continue
@@ -761,38 +760,34 @@ def process_items(items: list, listing_type: str, cards: list,
         if raw_median <= 0:
             continue
 
-        # Step 6: check price threshold
         if price > raw_median * PRICE_THRESHOLD:
             price_too_high += 1
             log_elapsed(
-                f"  PRICE SKIP: eBay ${price:.2f} > threshold "
-                f"${raw_median * PRICE_THRESHOLD:.2f} (median ${raw_median:.2f})"
+                f"  PRICE SKIP: {matched_card['canonical_name']} | "
+                f"eBay: ${price:.2f} | Market: ${raw_median:.2f} | "
+                f"Threshold: ${raw_median * PRICE_THRESHOLD:.2f}"
             )
             continue
 
-        # Step 7: check minimum profit
-        psa10 = float(matched_card.get("psa10_price") or 0)
+        psa10      = float(matched_card.get("psa10_price") or 0)
         net_profit = psa10 - price - 27.99
         if net_profit < MIN_PROFIT:
             low_profit += 1
             log_elapsed(f"  PROFIT SKIP: net profit ${net_profit:.2f} < min ${MIN_PROFIT}")
             continue
 
-        # Step 8: skip if already alerted
         url = item.get("itemWebUrl", "")
         if has_alerted(url):
             continue
 
-        # Time remaining for auctions (for logging)
         time_remaining_log = ""
         if listing_type == "auction":
-            end_time = item.get("itemEndDate", "")
-            tr = format_time_remaining(end_time)
+            tr = format_time_remaining(item.get("itemEndDate", ""))
             if tr:
                 time_remaining_log = f" | Time remaining: {tr}"
 
         log_elapsed(
-            f"DEAL: {matched_canonical} | eBay: ${price:.2f} | "
+            f"DEAL: {matched_card['canonical_name']} | eBay: ${price:.2f} | "
             f"Raw median: ${raw_median:.2f} | PSA10: ${psa10:.2f} | "
             f"Profit: ${net_profit:.2f}{time_remaining_log}"
         )
@@ -804,15 +799,14 @@ def process_items(items: list, listing_type: str, cards: list,
 
     elapsed_sec = time.time() - section_start
     log_elapsed(
-        f"Sent {alerts_sent} alerts for {listing_type} "
-        f"[{elapsed_sec:.1f}s] | "
+        f"Sent {alerts_sent} alerts for {listing_type} [{elapsed_sec:.1f}s] | "
         f"graded={skipped_graded} no_candidates={no_candidates} "
         f"no_player={no_player} no_card={no_card} "
         f"price_high={price_too_high} low_profit={low_profit}"
     )
 
 # ===========================================================================
-# Main scan job
+# Main scan
 # ===========================================================================
 
 def run_scan():
@@ -820,29 +814,29 @@ def run_scan():
     _scan_start_time = time.time()
 
     log.info("=" * 60)
-    log.info(f"Starting scan — {datetime.utcnow().isoformat()}")
+    log.info(f"Starting grading scan — {datetime.now(timezone.utc).isoformat()}")
     log.info("=" * 60)
 
-    # Clear card cache each run so prices stay fresh
     _card_cache.clear()
 
     for cat_name, cat_config in CATEGORIES.items():
+        sport = cat_config["sport"]
         log_elapsed(f"\n--- Scanning {cat_name} ---")
         time.sleep(5)
 
         try:
-            cards = load_gradeable_cards(cat_config["sport"], min_year=cat_config.get("min_year"))
+            load_player_index(sport)
+
+            cards = load_gradeable_cards(sport, min_year=cat_config.get("min_year"))
             if not cards:
                 log_elapsed(f"No gradeable cards found for {cat_name}, skipping")
                 continue
 
-            player_index = build_player_index(cards)
-
             bin_items     = search_ebay(cat_config, "bin")
             auction_items = search_ebay(cat_config, "auction")
 
-            process_items(bin_items,     "bin",     cards, player_index, cat_config)
-            process_items(auction_items, "auction", cards, player_index, cat_config)
+            process_items(bin_items,     "bin",     cards, sport, cat_config)
+            process_items(auction_items, "auction", cards, sport, cat_config)
 
         except Exception as e:
             log.error(f"Error scanning {cat_name}: {e}", exc_info=True)
@@ -852,18 +846,16 @@ def run_scan():
     log.info(f"\nScan complete — total time: {total_elapsed:.1f}s ({total_elapsed/60:.1f}m)")
 
 # ===========================================================================
-# Entry point — runs once immediately then hourly
+# Entry point — runs once immediately then every 30 minutes
 # ===========================================================================
 
 if __name__ == "__main__":
     init_alert_db()
-    log.info("Grade opportunity scanner starting...")
+    log.info("Grading opportunity scanner starting...")
 
-    # Run immediately on startup
     run_scan()
 
-    # Then schedule hourly
-    schedule.every(1).hours.do(run_scan)
+    schedule.every(30).minutes.do(run_scan)
 
     while True:
         schedule.run_pending()
