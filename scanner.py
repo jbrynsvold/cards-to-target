@@ -28,7 +28,7 @@ EBAY_SEARCH_URL = "https://api.ebay.com/buy/browse/v1/item_summary/search"
 EBAY_SCOPE = "https://api.ebay.com/oauth/api_scope"
 
 # Price threshold: alert if eBay listing <= raw_price * this multiplier
-PRICE_THRESHOLD = 1.15
+PRICE_THRESHOLD = 1.25
 
 # ROI-based card inclusion filters
 MIN_ROI_MULTIPLE  = 2.5   # psa10 / (raw + grading_cost) must be >= this
