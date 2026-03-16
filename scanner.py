@@ -519,6 +519,20 @@ def score_card_match(title_lower: str, card: dict,
         if title_tokens & STRONG_NON_BASE:
             score -= 40
 
+# Canonical name extra token check
+        canonical = (card.get("canonical_name") or "").lower()
+        set_name_lower = set_name.lower()
+        canonical_extra = [
+            t for t in tokenize(canonical)
+            if t not in tokenize(set_name_lower)
+            and t not in SET_NOISE_WORDS
+            and len(t) >= 4
+        ]
+        if canonical_extra:
+            missing = [t for t in canonical_extra if t not in title_lower]
+            if missing and len(missing) / len(canonical_extra) >= 0.5:
+                return -1.0
+                         
     # Year bonus
     if set_year and (ebay_year == set_year or ebay_year2 == set_year):
         score += 10
