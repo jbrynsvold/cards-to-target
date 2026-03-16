@@ -42,7 +42,7 @@ GRADING_COST      = 28
 MIN_PROFIT = 50
 
 # Minimum score for a card to be considered matched
-MIN_MATCH_SCORE     = 50
+MIN_MATCH_SCORE     = 60
 MIN_MATCH_SCORE_TCG = 65
 
 # Minimum word length for player name index
