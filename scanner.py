@@ -452,7 +452,7 @@ STRONG_NON_BASE = {
     "rainbow", "atomic", "laser", "hyper", "mojo", "cracked",
     "shimmer", "wave", "pulsar", "disco", "glossy", "lazer",
     "stamped", "prerelease", "shadowless", "cosmos",
-    "reverse", "fullart", "altart", "promo",
+    "reverse", "fullart", "altart", "promo", "kaboom", "horizontal",
 }
 
 def tokenize(text: str, min_len: int = 3) -> list:
