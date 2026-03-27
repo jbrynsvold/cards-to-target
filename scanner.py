@@ -753,12 +753,13 @@ def process_items(items: list, listing_type: str, cards: list,
         player_cards = [c for c in cards if c.get("player_name") == matched_player]
         if not player_cards:
             no_player += 1
-            log_elapsed(f"NO_PLAYER: \"{title}\" → player={matched_player} (not in gradeable cards)")
+            log_elapsed(f"NO_PLAYER: \"{title}\" → player={matched_player} (not in mv_grade_premiums ROI filter)")
             continue
 
         title_lower  = normalize_title(title).lower()
         matched_card = None
         best_score   = 0.0
+        best_debug   = ""
 
         for card in player_cards:
             s = score_card_match(title_lower, card, ebay_year, ebay_year2, ebay_card_num)
@@ -767,18 +768,34 @@ def process_items(items: list, listing_type: str, cards: list,
             if s > best_score:
                 best_score   = s
                 matched_card = card
+                # Build debug string for best match
+                set_name_norm = normalize_title(card.get("set_name") or "")
+                card_sport    = card.get("sport", "")
+                card_is_tcg   = card_sport in {"Pokemon", "Yu-Gi-Oh", "Other TCG", "Non-Sport Vintage"}
+                req, opt      = set_tokens(set_name_norm, is_tcg=card_is_tcg)
+                found_req     = [t for t in req if t in title_lower]
+                missing_req   = [t for t in req if t not in title_lower]
+                found_opt     = [t for t in opt if t in title_lower]
+                best_debug    = (
+                    f"set={card.get('set_name')} | "
+                    f"req_found={found_req} req_missing={missing_req} "
+                    f"opt_found={found_opt} | "
+                    f"variation={card.get('variation') or 'base'} | "
+                    f"year={card.get('set_year')} ebay_year={ebay_year}/{ebay_year2}"
+                )
 
         if not matched_card or best_score < min_score:
             no_card += 1
             log_elapsed(
                 f"NO_CARD: \"{title}\" → player={matched_player} "
-                f"best_score={best_score:.0f} cards_checked={len(player_cards)}"
+                f"best_score={best_score:.0f}/{min_score} cards_checked={len(player_cards)}\n"
+                f"          BEST: {best_debug}"
             )
             continue
 
         log_elapsed(
             f"CARD MATCH: \"{title}\" → {matched_card['canonical_name']} "
-            f"(score={best_score:.0f} variation={matched_card.get('variation') or 'base'})"
+            f"(score={best_score:.0f} | {best_debug})"
         )
 
         price = float(item.get("price", {}).get("value", 0))
@@ -831,10 +848,10 @@ def process_items(items: list, listing_type: str, cards: list,
 
     elapsed_sec = time.time() - section_start
     log_elapsed(
-        f"Sent {alerts_sent} alerts for {listing_type} [{elapsed_sec:.1f}s] | "
-        f"graded={skipped_graded} no_candidates={no_candidates} "
-        f"no_player={no_player} no_card={no_card} "
-        f"price_high={price_too_high} low_profit={low_profit}"
+        f"Sent {alerts_sent} alerts for {listing_type} [{elapsed_sec:.1f}s]\n"
+        f"  graded={skipped_graded} | no_candidates={no_candidates} | "
+        f"no_player={no_player} | no_card={no_card} | "
+        f"price_high={price_too_high} | low_profit={low_profit}"
     )
 
 # ===========================================================================
