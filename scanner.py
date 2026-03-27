@@ -848,9 +848,9 @@ def post_discord_alert(card: dict, item: dict, listing_type: str,
         "url":         item.get("itemWebUrl", ""),
         "color":       category_config["color"],
         "fields": [
-            {"name": "Set",          "value": set_display,                         "inline": True},
-            {"name": "Listing Type", "value": type_label,                          "inline": True},
-            {"name": "Card #",       "value": str(card.get("card_number", "N/A")), "inline": True},
+            {"name": "Set",          "value": set_display or "Unknown",              "inline": True},
+            {"name": "Listing Type", "value": type_label,                            "inline": True},
+            {"name": "Card #",       "value": str(card.get("card_number") or "N/A"), "inline": True},
         ],
         "footer": {"text": "Always verify condition before grading."},
     }
