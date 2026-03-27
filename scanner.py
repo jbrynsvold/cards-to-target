@@ -402,10 +402,19 @@ def tokenize(text: str, min_len: int = 3) -> list:
 def set_tokens(set_name: str, is_tcg: bool = False) -> tuple:
     all_tokens = [t for t in tokenize(set_name) if t not in SET_NOISE_WORDS]
     if is_tcg:
-        # Strip year tokens — sellers rarely include year in Pokemon titles
-        all_tokens = [t for t in all_tokens if not re.match(r'^\d{4}$', t)]
-        required = [t for t in all_tokens if t not in POKEMON_GENERATION_TOKENS]
-        optional = [t for t in all_tokens if t in POKEMON_GENERATION_TOKENS]
+        year_tokens  = [t for t in all_tokens if re.match(r'^\d{4}$', t)]
+        non_year     = [t for t in all_tokens if not re.match(r'^\d{4}$', t)]
+        gen_tokens   = [t for t in non_year if t in POKEMON_GENERATION_TOKENS]
+        unique_tokens = [t for t in non_year if t not in POKEMON_GENERATION_TOKENS]
+
+        if unique_tokens:
+            # Sub-set — unique name tokens are required, generation is optional
+            required = unique_tokens
+            optional = gen_tokens + year_tokens
+        else:
+            # Base set — generation tokens are all we have, so require them
+            required = gen_tokens
+            optional = year_tokens
     else:
         required = all_tokens
         optional = []
