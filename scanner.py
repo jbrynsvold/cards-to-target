@@ -51,6 +51,10 @@ EXCL = (
     ' -"art card" -"fan art" -"custom card" -"custom slab" -"custom art"'
     ' -"uncut" -"panels" -"stamp card" -"holographic"'
     ' -"tcg pocket" -"pocket" -"japanese" -"chinese" -"korean"'
+    ' -"pick your player" -"pick & choose" -"pick from list"'
+    ' -"fill your set" -"build a lot" -"set break" -"card pick"'
+    ' -"complete a set" -"complete the set" -"take your pick"'
+    ' -"buy more" -"free ship" -"flat s/h"'
     ' -PSA -BGS -SGC -CGC -graded -autograph -auto'
     ' -cards'
 )
