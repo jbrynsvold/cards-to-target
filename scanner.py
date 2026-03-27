@@ -882,7 +882,7 @@ def post_discord_alert(card: dict, item: dict, listing_type: str,
     embed = {
         "title":       f"{emoji} Grading Opportunity — {card['canonical_name']}{rookie_tag}",
         "description": description,
-        "url":         item.get("itemWebUrl", ""),
+        "url": get_item_url(item),
         "color":       category_config["color"],
         "fields": [
             {"name": "Set",          "value": set_display or "Unknown",              "inline": True},
@@ -1074,7 +1074,7 @@ def process_items(items: list, listing_type: str, cards: list,
             )
             continue
 
-        url = item.get("itemWebUrl", "")
+        url = get_item_url(item)
         if has_alerted(url):
             continue
 
