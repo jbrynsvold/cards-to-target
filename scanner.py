@@ -400,9 +400,10 @@ def tokenize(text: str, min_len: int = 3) -> list:
     return [w.lower() for w in re.split(r'[\W_]+', text) if len(w) >= min_len]
 
 def set_tokens(set_name: str, is_tcg: bool = False) -> tuple:
-    """Returns (required_tokens, optional_tokens)."""
     all_tokens = [t for t in tokenize(set_name) if t not in SET_NOISE_WORDS]
     if is_tcg:
+        # Strip year tokens — sellers rarely include year in Pokemon titles
+        all_tokens = [t for t in all_tokens if not re.match(r'^\d{4}$', t)]
         required = [t for t in all_tokens if t not in POKEMON_GENERATION_TOKENS]
         optional = [t for t in all_tokens if t in POKEMON_GENERATION_TOKENS]
     else:
