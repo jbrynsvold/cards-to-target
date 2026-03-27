@@ -333,7 +333,7 @@ def load_gradeable_cards(sport: str, min_year: int = None) -> list:
         result = supabase.table("mv_grade_premiums") \
             .select("player_name, set_name, set_year, card_number, variation, "
                     "canonical_name, is_rookie, raw_price, psa9_price, psa10_price, "
-                    "grading_score, raw_to_psa9_mult, psa10_sale_count_30d, raw_sale_count_30d") \
+                    "grading_score, raw_to_psa9_mult, psa10_sale_count_30d, raw_sale_count_30d, sport") \
             .eq("sport", sport) \
             .not_.is_("raw_price", "null") \
             .not_.is_("psa10_price", "null") \
