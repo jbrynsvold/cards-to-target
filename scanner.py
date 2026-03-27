@@ -39,6 +39,8 @@ MIN_MATCH_SCORE     = 65
 MIN_MATCH_SCORE_TCG = 55  # slightly lower for TCG since set name matching is looser
 MIN_WORD_LEN        = 4
 EBAY_FEE_PCT        = 0.1287
+MIN_PRICE_PCT       = 0.30  # eBay price must be at least 30% of raw median
+
 
 EXCL = (
     '-"you pick" -"lot of" -"choose your" -"complete your set" -"u pick"'
@@ -640,6 +642,22 @@ def score_card_match(title_lower: str, card: dict,
         return -1.0
 
     # ===========================================================
+    # Panini sub-brand mismatch hard filter (sports only)
+    # ===========================================================                         
+                         
+    PANINI_BRANDS = {"prizm", "select", "optic", "mosaic", "chronicles",
+                     "contenders", "donruss", "prestige", "spectra", "flawless"}
+    if not is_tcg:
+        title_brands = PANINI_BRANDS & set(tokenize(title_lower))
+        db_brands    = PANINI_BRANDS & set(tokenize(combined_db))
+        if title_brands - db_brands:
+            return -1.0
+
+    # ===========================================================
+    # Year filter — hard for sports, bonus only for TCG
+    # ===========================================================
+                         
+    # ===========================================================
     # Year filter — hard for sports, bonus only for TCG
     # ===========================================================
     preferred_year = ebay_year2 if ebay_year2 else ebay_year
@@ -1004,6 +1022,15 @@ def process_items(items: list, listing_type: str, cards: list,
         price = float(price_data.get("value", 0))
         if price <= 0:
             log_elapsed(f"PRICE_ZERO: {matched_card['canonical_name']} | no price on listing")
+            continue
+
+        if price < raw_median * MIN_PRICE_PCT:
+            no_candidates += 1  # or add a new counter
+            log_elapsed(
+                f"PRICE_TOO_LOW: {matched_card['canonical_name']} | "
+                f"eBay: {fmt(price)} | GIGA Median: {fmt(raw_median)} | "
+                f"Floor: {fmt(raw_median * MIN_PRICE_PCT)}"
+            )
             continue
 
         raw_median = float(matched_card["raw_price"])
