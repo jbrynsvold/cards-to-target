@@ -36,7 +36,7 @@ MIN_PSA10_SALES     = 1
 GRADING_COST        = 28
 MIN_PROFIT          = 50
 MIN_MATCH_SCORE     = 65
-MIN_MATCH_SCORE_TCG = 65
+MIN_MATCH_SCORE_TCG = 55  # slightly lower for TCG since set name matching is looser
 MIN_WORD_LEN        = 4
 EBAY_FEE_PCT        = 0.1287
 
@@ -69,6 +69,11 @@ JAPANESE_SET_CODE_RE = re.compile(
     r'\b(sv\d+[a-zA-Z]*|SV-P|SV[0-9]+[a-zA-Z]|s\d+[a-zA-Z]|SM\d+|XY\d+|BW\d+)\b'
 )
 
+# Yu-Gi-Oh set code pattern e.g. LOB-005, MRD-126, RA01-EN008
+YGO_SET_CODE_RE = re.compile(
+    r'\b([A-Z]{2,6}\d*-[A-Z]{0,2}\d{3})\b'
+)
+
 BASE_VARIATIONS = {"", "base", "none", "base card", "n/a"}
 
 SET_NOISE_WORDS = {
@@ -88,6 +93,57 @@ POKEMON_GENERATION_TOKENS = {
     "scarlet", "violet", "sword", "shield", "sun", "moon",
     "black", "white", "diamond", "pearl", "heartgold", "soulsilver",
     "winds", "waves",
+}
+
+# Pokemon set name aliases — maps canonical set name keywords to alternate
+# short names sellers use in titles. Keys are substrings of the DB set name
+# (lowercase), values are lists of alternate terms sellers use.
+POKEMON_SET_ALIASES = {
+    "surging sparks":       ["sv08"],
+    "stellar crown":        ["sv07"],
+    "twilight masquerade":  ["sv06"],
+    "shrouded fable":       ["sv06.5"],
+    "paldean fates":        ["sv04.5"],
+    "paradox rift":         ["sv04"],
+    "obsidian flames":      ["sv03", "obsidian"],
+    "paldea evolved":       ["sv02"],
+    "scarlet violet":       ["sv01"],
+    "prismatic evolutions": ["sv08.5", "prismatic evo"],
+    "ascended heroes":      ["ascended heros"],
+    "phantasmal flames":    ["phantasmal"],
+    "lost origin":          ["lost origin"],
+    "crown zenith":         ["crown zenith"],
+    "brilliant stars":      ["brilliant stars"],
+    "fusion strike":        ["fusion strike"],
+    "battle styles":        ["battle styles"],
+    "vivid voltage":        ["vivid voltage"],
+    "darkness ablaze":      ["darkness ablaze"],
+    "rebel clash":          ["rebel clash"],
+    "team up":              ["team up"],
+    "unbroken bonds":       ["unbroken bonds"],
+    "cosmic eclipse":       ["cosmic eclipse"],
+    "hidden fates":         ["hidden fates"],
+    "ultra prism":          ["ultra prism"],
+    "forbidden light":      ["forbidden light"],
+    "celestial storm":      ["celestial storm"],
+    "lost thunder":         ["lost thunder"],
+    "dragon majesty":       ["dragon majesty"],
+    "roaring skies":        ["roaring skies"],
+    "ancient origins":      ["ancient origins"],
+    "primal clash":         ["primal clash"],
+    "phantom forces":       ["phantom forces"],
+    "furious fists":        ["furious fists"],
+    "flashfire":            ["flashfire"],
+    "plasma blast":         ["plasma blast"],
+    "plasma freeze":        ["plasma freeze"],
+    "plasma storm":         ["plasma storm"],
+    "boundaries crossed":   ["boundaries crossed"],
+    "dragons exalted":      ["dragons exalted"],
+    "dark explorers":       ["dark explorers"],
+    "next destinies":       ["next destinies"],
+    "noble victories":      ["noble victories"],
+    "emerging powers":      ["emerging powers"],
+    "black star promo":     ["swsh promo", "sm promo", "xy promo", "black star"],
 }
 
 # City/partial team names that pollute the player index
@@ -172,7 +228,8 @@ CATEGORIES = {
     "Yu-Gi-Oh": {
         "sport": "Yu-Gi-Oh", "ebay_query": f"yugioh {EXCL}",
         "ebay_category": "183454", "aspect_filter": "categoryId:183454,Graded:{No}",
-        "discord_emoji": "🃏", "color": 0x6A0DAD, "is_tcg": True, "min_year": 2010,
+        "discord_emoji": "🃏", "color": 0x6A0DAD, "is_tcg": True,
+        # No min_year — eligible YGO cards are mostly 2002-2004
     },
 }
 
@@ -305,6 +362,22 @@ def normalize_title(title: str) -> str:
         result = re.sub(pattern, replacement, result, flags=re.IGNORECASE)
     return result
 
+def expand_pokemon_set_aliases(title_lower: str, set_name: str) -> str:
+    """
+    If the DB set name contains a known alias key, check if the seller used
+    an alias in the title and inject the canonical key words so token matching
+    succeeds. Also works in reverse — canonical words in title, inject aliases.
+    """
+    set_name_lower = set_name.lower()
+    for key, aliases in POKEMON_SET_ALIASES.items():
+        if key in set_name_lower:
+            for alias in aliases:
+                if alias in title_lower:
+                    return title_lower + " " + key
+            if key in title_lower:
+                return title_lower + " " + " ".join(aliases)
+    return title_lower
+
 # ===========================================================================
 # Token helpers
 # ===========================================================================
@@ -407,7 +480,7 @@ def load_gradeable_cards(sport: str, min_year: int = None) -> list:
     if cache_key in _card_cache:
         return _card_cache[cache_key]
     log_elapsed(f"Loading gradeable cards for {sport}...")
-    all_cards = []
+    all_cards  = []
     batch_size = 1000
     offset     = 0
     while True:
@@ -490,6 +563,11 @@ def parse_title_years(title: str):
     ebay_card_num  = card_num_match.group(1).lstrip('0') if card_num_match else None
     return ebay_year, ebay_year2, ebay_card_num
 
+def extract_ygo_set_code(title: str) -> str | None:
+    """Extract Yu-Gi-Oh set code like LOB-005 or RA01-EN008 from title."""
+    match = YGO_SET_CODE_RE.search(title.upper())
+    return match.group(1) if match else None
+
 def build_card_debug(card: dict, title_lower: str, ebay_year, ebay_year2) -> str:
     set_name_norm = normalize_title(card.get("set_name") or "")
     card_sport    = card.get("sport", "")
@@ -507,16 +585,42 @@ def build_card_debug(card: dict, title_lower: str, ebay_year, ebay_year2) -> str
 
 def score_card_match(title_lower: str, card: dict,
                      ebay_year: int, ebay_year2: int,
-                     ebay_card_num: str) -> float:
+                     ebay_card_num: str,
+                     ygo_set_code: str = None) -> float:
     set_year    = int(card["set_year"]) if card.get("set_year") else None
-    db_card_num = str(card.get("card_number") or "").lstrip("0")
+    db_card_num = str(card.get("card_number") or "").strip().upper()
     set_name    = (card.get("set_name") or "")
     variation   = (card.get("variation") or "").strip()
     is_base     = variation.lower() in BASE_VARIATIONS
     sport       = card.get("sport", "")
     is_tcg      = sport in {"Pokemon", "Yu-Gi-Oh", "Other TCG", "Non-Sport Vintage"}
+    is_ygo      = sport == "Yu-Gi-Oh"
 
+    # ===========================================================
+    # Yu-Gi-Oh — card number is the primary match signal
+    # ===========================================================
+    if is_ygo:
+        if not ygo_set_code or not db_card_num:
+            return -1.0
+        if ygo_set_code.upper() != db_card_num:
+            return -1.0
+        # Card number matches — now check 1st Edition variation
+        title_is_1st = bool(re.search(r'\b1st\b|\b1st\s+ed', title_lower, re.IGNORECASE))
+        db_is_1st    = "1st" in variation.lower()
+        if db_is_1st and not title_is_1st:
+            return -1.0
+        if title_is_1st and not db_is_1st:
+            return -1.0
+        # Strong match
+        score = 100.0
+        preferred_year = ebay_year2 if ebay_year2 else ebay_year
+        if set_year and preferred_year and preferred_year == set_year:
+            score += 10
+        return score
+
+    # ===========================================================
     # Auto/autograph hard filter
+    # ===========================================================
     combined_db   = (set_name + " " + variation).lower()
     db_is_auto    = any(w in combined_db for w in ["autograph", " auto", "/a "])
     title_is_auto = any(w in title_lower for w in ["autograph", "/a ", " auto "])
@@ -525,7 +629,9 @@ def score_card_match(title_lower: str, card: dict,
     if title_is_auto and not db_is_auto:
         return -1.0
 
+    # ===========================================================
     # X-Fractor hard filter
+    # ===========================================================
     db_is_xfractor    = "x-fractor" in combined_db or "xfractor" in combined_db
     title_is_xfractor = "x-fractor" in title_lower or "xfractor" in title_lower
     if db_is_xfractor and not title_is_xfractor:
@@ -533,25 +639,36 @@ def score_card_match(title_lower: str, card: dict,
     if title_is_xfractor and not db_is_xfractor:
         return -1.0
 
-    # Year hard filter
+    # ===========================================================
+    # Year filter — hard for sports, bonus only for TCG
+    # ===========================================================
     preferred_year = ebay_year2 if ebay_year2 else ebay_year
-    if set_year and (ebay_year or ebay_year2):
-        if preferred_year != set_year and ebay_year != set_year:
-            return -1.0
+    if not is_tcg:
+        if set_year and (ebay_year or ebay_year2):
+            if preferred_year != set_year and ebay_year != set_year:
+                return -1.0
 
-    # Card number hard filter
-    if ebay_card_num and db_card_num:
-        if ebay_card_num != db_card_num:
+    # ===========================================================
+    # Card number hard filter (sports only)
+    # ===========================================================
+    if ebay_card_num and db_card_num and not is_ygo:
+        if ebay_card_num.upper() != db_card_num:
             return -1.0
 
     score = 0.0
 
-    # Set name matching
+    # ===========================================================
+    # Set name matching — with Pokemon alias expansion
+    # ===========================================================
     set_name_normalized = normalize_title(set_name)
+    effective_title = title_lower
+    if sport == "Pokemon":
+        effective_title = expand_pokemon_set_aliases(title_lower, set_name_normalized)
+
     required_tokens, optional_tokens = set_tokens(set_name_normalized, is_tcg=is_tcg)
 
     if required_tokens:
-        found_req   = [t for t in required_tokens if t in title_lower]
+        found_req   = [t for t in required_tokens if t in effective_title]
         match_ratio = len(found_req) / len(required_tokens)
         score += match_ratio * 60
         if match_ratio == 1.0:
@@ -564,10 +681,16 @@ def score_card_match(title_lower: str, card: dict,
         score += 10
 
     if optional_tokens:
-        found_opt = [t for t in optional_tokens if t in title_lower]
+        found_opt = [t for t in optional_tokens if t in effective_title]
         score += (len(found_opt) / len(optional_tokens)) * 15
 
+    # Year bonus for TCG (not hard filter)
+    if is_tcg and set_year and (preferred_year == set_year or ebay_year == set_year):
+        score += 15
+
+    # ===========================================================
     # Variation matching
+    # ===========================================================
     if not is_base:
         v_tokens = variation_tokens(variation)
         if v_tokens:
@@ -600,12 +723,12 @@ def score_card_match(title_lower: str, card: dict,
             if missing and len(missing) / len(canonical_extra) >= 0.5:
                 return -1.0
 
-    # Card number penalty
-    if db_card_num and not ebay_card_num:
+    # Card number penalty (sports only)
+    if not is_tcg and db_card_num and not ebay_card_num:
         score -= 30
 
-    # Year bonus
-    if set_year and (preferred_year == set_year or ebay_year == set_year):
+    # Year bonus (sports)
+    if not is_tcg and set_year and (preferred_year == set_year or ebay_year == set_year):
         score += 10
 
     return score
@@ -703,7 +826,6 @@ def post_discord_alert(card: dict, item: dict, listing_type: str,
         if tr:
             time_remaining_str = f"\n⏳ **Time Remaining:** {tr}"
 
-    # Fix duplicate year in set display
     set_year_str = str(card.get("set_year") or "")
     set_name_str = card.get("set_name") or ""
     if set_name_str.startswith(set_year_str):
@@ -754,6 +876,7 @@ def process_items(items: list, listing_type: str, cards: list,
         return
 
     is_tcg        = category_config.get("is_tcg", False)
+    is_ygo        = sport == "Yu-Gi-Oh"
     min_score     = MIN_MATCH_SCORE_TCG if is_tcg else MIN_MATCH_SCORE
     section_start = time.time()
 
@@ -781,7 +904,8 @@ def process_items(items: list, listing_type: str, cards: list,
             no_candidates += 1
             continue
 
-        if is_tcg and JAPANESE_SET_CODE_RE.search(title):
+        # Japanese set code filter — Pokemon only, not YGO
+        if is_tcg and not is_ygo and JAPANESE_SET_CODE_RE.search(title):
             no_candidates += 1
             continue
 
@@ -792,9 +916,19 @@ def process_items(items: list, listing_type: str, cards: list,
 
         ebay_year, ebay_year2, ebay_card_num = parse_title_years(title)
 
+        # Extract YGO set code — required for Yu-Gi-Oh matching
+        ygo_set_code = extract_ygo_set_code(title) if is_ygo else None
+
+        # Sports require year or card number
         if not is_tcg and not ebay_year and not ebay_card_num:
             no_candidates += 1
             log_elapsed(f"NO_CANDIDATE [no_year_or_cardnum]: {title}")
+            continue
+
+        # Yu-Gi-Oh requires a set code
+        if is_ygo and not ygo_set_code:
+            no_candidates += 1
+            log_elapsed(f"NO_CANDIDATE [no_ygo_set_code]: {title}")
             continue
 
         candidates = get_candidate_players(title, sport)
@@ -819,15 +953,15 @@ def process_items(items: list, listing_type: str, cards: list,
         reject_score = -999.0
 
         for card in player_cards:
-            s = score_card_match(title_lower, card, ebay_year, ebay_year2, ebay_card_num)
-
+            s = score_card_match(
+                title_lower, card, ebay_year, ebay_year2, ebay_card_num,
+                ygo_set_code=ygo_set_code
+            )
             if s < 0:
-                # Track the least-bad hard rejection for debugging
                 if s > reject_score:
                     reject_score = s
-                    reject_debug = f"HARD_REJECT " + build_card_debug(card, title_lower, ebay_year, ebay_year2)
+                    reject_debug = "HARD_REJECT " + build_card_debug(card, title_lower, ebay_year, ebay_year2)
                 continue
-
             if s > best_score:
                 best_score   = s
                 matched_card = card
