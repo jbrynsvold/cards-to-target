@@ -997,7 +997,11 @@ def process_items(items: list, listing_type: str, cards: list,
             f"(score={best_score:.0f} | {best_debug})"
         )
 
-        price = float(item.get("price", {}).get("value", 0))
+        if listing_type == "auction":
+            price_data = item.get("currentBidPrice") or item.get("price") or {}
+        else:
+            price_data = item.get("price") or {}
+        price = float(price_data.get("value", 0))
         if price <= 0:
             log_elapsed(f"PRICE_ZERO: {matched_card['canonical_name']} | no price on listing")
             continue
