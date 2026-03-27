@@ -618,51 +618,69 @@ def search_ebay(category_config: dict, listing_type: str) -> list:
 # Discord
 # ===========================================================================
 
+EBAY_FEE_PCT = 0.1287  # 12.87% standard eBay final value fee
+
 def post_discord_alert(card: dict, item: dict, listing_type: str,
                        ebay_price: float, category_config: dict):
     if not DISCORD_WEBHOOK:
         log.warning("No Discord webhook configured")
         return
+
     raw_price  = float(card["raw_price"])
     psa10      = float(card["psa10_price"])
     psa9       = float(card.get("psa9_price") or 0)
     grade_cost = 27.99
-    net_profit = psa10 - ebay_price - grade_cost
+    ebay_fees  = round(psa10 * EBAY_FEE_PCT, 2)
+    net_profit = psa10 - ebay_price - grade_cost - ebay_fees
+
     psa9_mult  = float(card.get("raw_to_psa9_mult") or 0)
     type_label = "🏷️ Buy It Now" if listing_type == "bin" else "⏱️ Auction"
     emoji      = category_config["discord_emoji"]
     rookie_tag = " 🌟 RC" if card.get("is_rookie") else ""
+
     hard_grade_warning = ""
     if psa9_mult >= 5.0:
         hard_grade_warning = f"\n⚠️ PSA 9 is {psa9_mult:.1f}x raw — historically difficult to grade"
+
     time_remaining_str = ""
     if listing_type == "auction":
         tr = format_time_remaining(item.get("itemEndDate", ""))
         if tr:
             time_remaining_str = f"\n⏳ **Time Remaining:** {tr}"
+
+    # Fix duplicate year in set display
+    set_year_str = str(card.get("set_year") or "")
+    set_name_str = card.get("set_name") or ""
+    if set_name_str.startswith(set_year_str):
+        set_display = set_name_str
+    else:
+        set_display = f"{set_year_str} {set_name_str}".strip()
+
     description = (
-        f"**eBay:** {fmt(ebay_price)}  ·  "
-        f"**DB Raw Median:** {fmt(raw_price)}  ·  "
-        f"**Grading Score:** {card['grading_score']:.0f}/100\n"
+        f"**eBay:** {fmt(ebay_price)}  ·  **GIGA Median:** {fmt(raw_price)}\n"
         f"**PSA 9:** {fmt(psa9)}  ·  **PSA 10:** {fmt(psa10)}\n"
-        f"**Est. Net Profit (PSA 10 via eBay):** {fmt(net_profit)} after {fmt(grade_cost)} grading"
+        f"**Est. Net Profit:** {fmt(net_profit)} "
+        f"_(after {fmt(grade_cost)} grading + {fmt(ebay_fees)} eBay fees)_"
         f"{time_remaining_str}"
         f"{hard_grade_warning}"
     )
+
     embed = {
         "title":       f"{emoji} Grading Opportunity — {card['canonical_name']}{rookie_tag}",
         "description": description,
         "url":         item.get("itemWebUrl", ""),
         "color":       category_config["color"],
         "fields": [
-            {"name": "Set",          "value": f"{card['set_year']} {card['set_name']}", "inline": True},
-            {"name": "Listing Type", "value": type_label,                               "inline": True},
-            {"name": "Card #",       "value": str(card.get("card_number", "N/A")),      "inline": True},
+            {"name": "Set",          "value": set_display,                          "inline": True},
+            {"name": "Listing Type", "value": type_label,                           "inline": True},
+            {"name": "Card #",       "value": str(card.get("card_number", "N/A")),  "inline": True},
         ],
-        "footer": {"text": "Prices from DB (30-day median). Always verify condition before grading."},
+        "footer": {"text": "Always verify condition before grading."},
     }
+
     if item.get("image", {}).get("imageUrl"):
         embed["thumbnail"] = {"url": item["image"]["imageUrl"]}
+
     resp = requests.post(
         DISCORD_WEBHOOK,
         json={"embeds": [embed]},
@@ -670,28 +688,6 @@ def post_discord_alert(card: dict, item: dict, listing_type: str,
     )
     if not resp.ok:
         log.error(f"Discord webhook error: {resp.status_code} {resp.text}")
-
-def format_time_remaining(end_time_str: str) -> str:
-    if not end_time_str:
-        return ""
-    try:
-        end_dt     = datetime.fromisoformat(end_time_str.replace("Z", "+00:00"))
-        now_dt     = datetime.now(timezone.utc)
-        delta      = end_dt - now_dt
-        if delta.total_seconds() <= 0:
-            return "ended"
-        total_secs = int(delta.total_seconds())
-        hours      = total_secs // 3600
-        minutes    = (total_secs % 3600) // 60
-        seconds    = total_secs % 60
-        if hours > 0:
-            return f"{hours}h {minutes}m"
-        elif minutes > 0:
-            return f"{minutes}m {seconds}s"
-        else:
-            return f"{seconds}s"
-    except Exception:
-        return ""
 
 # ===========================================================================
 # Process items
