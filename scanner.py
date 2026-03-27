@@ -65,6 +65,9 @@ EXCL_KEYWORDS = [
     "uncut", "panels", "stamp card", "holographic",
     "tcg pocket", "pocket",
     "japanese", "chinese", "korean",
+    "pick your player", "pick & choose", "pick from list",
+    "fill your set", "build a lot", "set break",
+    "card pick", "singles",
 ]
 
 JAPANESE_SET_CODE_RE = re.compile(
