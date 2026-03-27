@@ -1031,17 +1031,16 @@ def process_items(items: list, listing_type: str, cards: list,
             log_elapsed(f"PRICE_ZERO: {matched_card['canonical_name']} | no price on listing")
             continue
 
+        raw_median = float(matched_card["raw_price"])
+        if raw_median <= 0:
+            continue
+
         if price < raw_median * MIN_PRICE_PCT:
-            no_candidates += 1  # or add a new counter
             log_elapsed(
                 f"PRICE_TOO_LOW: {matched_card['canonical_name']} | "
                 f"eBay: {fmt(price)} | GIGA Median: {fmt(raw_median)} | "
                 f"Floor: {fmt(raw_median * MIN_PRICE_PCT)}"
             )
-            continue
-
-        raw_median = float(matched_card["raw_price"])
-        if raw_median <= 0:
             continue
 
         if price > raw_median * PRICE_THRESHOLD:
