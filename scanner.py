@@ -970,6 +970,21 @@ def process_items(items: list, listing_type: str, cards: list,
         if not matched_card or best_score < min_score:
             no_card += 1
             debug_line = best_debug if best_debug else reject_debug
+            # If score is exactly 0 with many cards checked, none passed even basic set token matching
+            if best_score == 0 and len(player_cards) > 5:
+                # Sample the first card to show what tokens are expected
+                sample = player_cards[0]
+                sn = normalize_title(sample.get("set_name") or "")
+                cs = sample.get("sport", "")
+                tcg = cs in {"Pokemon", "Yu-Gi-Oh", "Other TCG", "Non-Sport Vintage"}
+                req, _ = set_tokens(sn, is_tcg=tcg)
+                eff = expand_pokemon_set_aliases(title_lower, sn) if cs == "Pokemon" else title_lower
+                found = [t for t in req if t in eff]
+                debug_line = (
+                    f"ZERO_SCORE ({len(player_cards)} cards) — "
+                    f"sample set={sample.get('set_name')} | "
+                    f"req={req} found={found}"
+                )
             log_elapsed(
                 f"NO_CARD: \"{title}\" → player={matched_player} "
                 f"best_score={best_score:.0f}/{min_score} cards_checked={len(player_cards)}\n"
@@ -984,6 +999,7 @@ def process_items(items: list, listing_type: str, cards: list,
 
         price = float(item.get("price", {}).get("value", 0))
         if price <= 0:
+            log_elapsed(f"PRICE_ZERO: {matched_card['canonical_name']} | no price on listing")
             continue
 
         raw_median = float(matched_card["raw_price"])
