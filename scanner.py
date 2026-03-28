@@ -56,7 +56,7 @@ EXCL = (
     ' -"complete a set" -"complete the set" -"take your pick"'
     ' -"buy more" -"free ship" -"flat s/h"'
     ' -PSA -BGS -SGC -CGC -graded'
-    ' -"cards!"'
+    ' -"cards!" -"jumbo"'
 )
 
 EXCL_KEYWORDS = [
@@ -71,7 +71,7 @@ EXCL_KEYWORDS = [
     "japanese", "chinese", "korean",
     "pick your player", "pick & choose", "pick from list",
     "fill your set", "build a lot", "set break",
-    "card pick", "singles",
+    "card pick", "singles", "jumbo",
 ]
 
 JAPANESE_SET_CODE_RE = re.compile(
@@ -101,7 +101,7 @@ STRONG_NON_BASE = {
 POKEMON_GENERATION_TOKENS = {
     "scarlet", "violet", "sword", "shield", "sun", "moon",
     "black", "white", "diamond", "pearl", "heartgold", "soulsilver",
-    "winds", "waves",
+    "winds", "waves", "mega", "evolution",
 }
 
 # Pokemon set name aliases — maps canonical set name keywords to alternate
@@ -686,10 +686,7 @@ def score_card_match(title_lower: str, card: dict,
     # ===========================================================
     # Year filter — hard for sports, bonus only for TCG
     # ===========================================================
-                         
-    # ===========================================================
-    # Year filter — hard for sports, bonus only for TCG
-    # ===========================================================
+
     preferred_year = ebay_year
     if not is_tcg:
         if set_year and (ebay_year or ebay_year2):
@@ -1056,6 +1053,7 @@ def process_items(items: list, listing_type: str, cards: list,
 
         raw_median = float(matched_card["raw_price"])
         if raw_median <= 0:
+            log_elapsed(f"NO_RAW_PRICE: {matched_card['canonical_name']} | raw_price is zero or null")
             continue
 
         if price < raw_median * MIN_PRICE_PCT:
