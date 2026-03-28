@@ -573,7 +573,7 @@ def parse_title_years(title: str):
     full_year  = re.search(r'\b(19|20)\d{2}\b', title)
     if full_year:
         ebay_year = int(full_year.group())
-        hockey_year = re.search(r'\b(19|20)(\d{2})[-/](\d{2})\b', normalized)
+        hockey_year = re.search(r'\b(19|20)(\d{2})[-/](\d{2})\b', title)
         if hockey_year:
             suffix = int(hockey_year.group(3))
             ebay_year2 = 2000 + suffix if suffix <= 30 else 1900 + suffix
