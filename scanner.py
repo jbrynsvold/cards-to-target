@@ -761,9 +761,10 @@ def score_card_match(title_lower: str, card: dict,
             if missing and len(missing) / len(canonical_extra) >= 0.5:
                 return -1.0
 
-    # Card number penalty (sports only)
-    if not is_tcg and db_card_num and not ebay_card_num:
-        score -= 30
+    # Card number bonus — reward matches, no penalty for absence
+    if not is_tcg and not is_ygo and db_card_num and ebay_card_num:
+        if ebay_card_num.upper() == db_card_num:
+            score += 15
 
     # Year bonus (sports)
     if not is_tcg and set_year and (preferred_year == set_year or ebay_year == set_year):
