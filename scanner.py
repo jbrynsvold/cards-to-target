@@ -305,7 +305,7 @@ def has_alerted(url: str) -> bool:
 def record_alert(url: str):
     item_id = extract_item_id(url)
     supabase.table("alert_log") \
-        .upsert({"item_url": item_id, "alerted_at": datetime.now(timezone.utc).isoformat()}) \
+        .upsert({"item_url": item_id, "scanner": "grading", "alerted_at": datetime.now(timezone.utc).isoformat()}) \
         .execute()
 
 # ===========================================================================
