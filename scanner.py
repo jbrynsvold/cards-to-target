@@ -92,7 +92,7 @@ SET_NOISE_WORDS = {
 
 REQUIRED_SET_TOKENS = {
     "sapphire", "inception", "heritage", "luminance",
-    "flawless", "sterling",
+    "flawless", "sterling", "zenith", "stellar",
 }
 
 STRONG_NON_BASE = {
