@@ -295,25 +295,18 @@ def extract_item_id(url: str) -> str:
 
 def has_alerted(url: str) -> bool:
     item_id = extract_item_id(url)
-    conn    = sqlite3.connect("alerts.db")
-    row     = conn.execute(
-        """SELECT 1 FROM alert_log 
-           WHERE item_url = ? 
-           AND alerted_at > datetime('now', '-24 hours')""",
-        (item_id,)
-    ).fetchone()
-    conn.close()
-    return row is not None
+    result = supabase.table("alert_log") \
+        .select("item_url") \
+        .eq("item_url", item_id) \
+        .gte("alerted_at", (datetime.now(timezone.utc) - timedelta(hours=24)).isoformat()) \
+        .execute()
+    return bool(result.data)
 
 def record_alert(url: str):
     item_id = extract_item_id(url)
-    conn = sqlite3.connect("alerts.db")
-    conn.execute(
-        "INSERT OR IGNORE INTO alert_log (item_url, alerted_at) VALUES (?, ?)",
-        (item_id, datetime.now(timezone.utc).isoformat())
-    )
-    conn.commit()
-    conn.close()
+    supabase.table("alert_log") \
+        .upsert({"item_url": item_id, "alerted_at": datetime.now(timezone.utc).isoformat()}) \
+        .execute()
 
 # ===========================================================================
 # eBay token
