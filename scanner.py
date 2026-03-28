@@ -1111,7 +1111,8 @@ def process_items(items: list, listing_type: str, cards: list,
 # ===========================================================================
 
 def run_scan():
-    global _scan_start_time
+    global seen_urls
+    seen_urls = set()
     _scan_start_time = time.time()
     log.info("=" * 60)
     log.info(f"Starting grading scan — {datetime.now(timezone.utc).isoformat()}")
