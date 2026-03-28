@@ -266,6 +266,14 @@ def log_elapsed(message: str):
 def fmt(n: float) -> str:
     return f"${n:,.2f}"
 
+def get_item_url(item: dict) -> str:
+    item_id = item.get("itemId", "")
+    if item_id:
+        numeric = re.search(r'\d{8,}', item_id)
+        if numeric:
+            return f"https://www.ebay.com/itm/{numeric.group()}"
+    return item.get("itemWebUrl", "")
+
 # ===========================================================================
 # SQLite alert dedup
 # ===========================================================================
@@ -274,7 +282,7 @@ def init_alert_db():
     conn = sqlite3.connect("alerts.db")
     conn.execute("""
         CREATE TABLE IF NOT EXISTS alert_log (
-            item_url TEXT PRIMARY KEY,
+            item_url   TEXT PRIMARY KEY,
             alerted_at TEXT
         )
     """)
@@ -287,9 +295,12 @@ def extract_item_id(url: str) -> str:
 
 def has_alerted(url: str) -> bool:
     item_id = extract_item_id(url)
-    conn = sqlite3.connect("alerts.db")
-    row = conn.execute(
-        "SELECT 1 FROM alert_log WHERE item_url = ?", (item_id,)
+    conn    = sqlite3.connect("alerts.db")
+    row     = conn.execute(
+        """SELECT 1 FROM alert_log 
+           WHERE item_url = ? 
+           AND alerted_at > datetime('now', '-24 hours')""",
+        (item_id,)
     ).fetchone()
     conn.close()
     return row is not None
@@ -682,7 +693,7 @@ def score_card_match(title_lower: str, card: dict,
     preferred_year = ebay_year
     if not is_tcg:
         if set_year and (ebay_year or ebay_year2):
-            if preferred_year != set_year and ebay_year != set_year:
+            if ebay_year != set_year and ebay_year2 != set_year:
                 return -1.0
 
     # ===========================================================
