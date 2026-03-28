@@ -634,7 +634,7 @@ def score_card_match(title_lower: str, card: dict,
             return -1.0
         # Strong match
         score = 100.0
-        preferred_year = ebay_year2 if ebay_year2 else ebay_year
+        preferred_year = ebay_year
         if set_year and preferred_year and preferred_year == set_year:
             score += 10
         return score
@@ -679,7 +679,7 @@ def score_card_match(title_lower: str, card: dict,
     # ===========================================================
     # Year filter — hard for sports, bonus only for TCG
     # ===========================================================
-    preferred_year = ebay_year2 if ebay_year2 else ebay_year
+    preferred_year = ebay_year
     if not is_tcg:
         if set_year and (ebay_year or ebay_year2):
             if preferred_year != set_year and ebay_year != set_year:
