@@ -90,6 +90,11 @@ SET_NOISE_WORDS = {
     "trading", "card", "cards", "tcg", "nfl", "nba", "mlb", "nhl",
 }
 
+REQUIRED_SET_TOKENS = {
+    "sapphire", "inception", "heritage", "luminance",
+    "flawless", "sterling",
+}
+
 STRONG_NON_BASE = {
     "silver", "gold", "refractor", "prizm", "holo", "foil",
     "rainbow", "atomic", "laser", "hyper", "mojo", "cracked",
@@ -704,6 +709,10 @@ def score_card_match(title_lower: str, card: dict,
         effective_title = expand_pokemon_set_aliases(title_lower, set_name_normalized)
 
     required_tokens, optional_tokens = set_tokens(set_name_normalized, is_tcg=is_tcg)
+    required_set_distinguishers = REQUIRED_SET_TOKENS & set(required_tokens)
+    if required_set_distinguishers:
+        if not all(t in title_lower for t in required_set_distinguishers):
+            return -1.0
 
     if required_tokens:
         found_req   = [t for t in required_tokens if t in effective_title]
@@ -725,6 +734,7 @@ def score_card_match(title_lower: str, card: dict,
     # Year bonus for TCG (not hard filter)
     if is_tcg and set_year and (preferred_year == set_year or ebay_year == set_year):
         score += 15
+
 
     # ===========================================================
     # Variation matching
