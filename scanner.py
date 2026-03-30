@@ -93,6 +93,33 @@ SET_NOISE_WORDS = {
 REQUIRED_SET_TOKENS = {
     "sapphire", "inception", "heritage", "luminance",
     "flawless", "sterling", "zenith", "stellar",
+    "obsidian", "immaculate", "spectra", "playbook",
+    "chronicles", "absolute", "threads", "revolution",
+    "noir", "impeccable", "contenders", "certified",
+    "exquisite", "artifacts", "masterpieces", "ovation",
+    "parkhurst", "goodwin", "authentix", "trilogy",
+    "archives", "tribute", "dynasty", "museum",
+    "gallery", "gypsy", "finest", "stadium",
+    "flair", "illusions", "mystique", "hardcourt",
+    "encased", "transcendent", "definitive", "timeless",
+    "gridiron", "tiffany", "showcase", "throwback",
+    "dominion", "allure",
+}
+
+PANINI_BRANDS = {
+    "prizm", "select", "optic", "mosaic", "chronicles",
+    "contenders", "donruss", "prestige", "spectra", "flawless",
+    "obsidian", "phoenix", "absolute", "certified", "playbook",
+    "national", "treasures", "immaculate", "noir", "impeccable",
+    "flux", "hoops", "score", "elite", "origins",
+    "revolution", "crown", "royale", "luminance",
+}
+
+TOPPS_BRANDS = {
+    "finest", "chrome", "heritage", "archive", "archives",
+    "tribute", "stadium", "gypsy", "ginter", "bowman",
+    "dynasty", "museum", "gallery", "inception", "sterling",
+    "definitive", "transcendent", "luminaries",
 }
 
 STRONG_NON_BASE = {
@@ -673,12 +700,14 @@ def score_card_match(title_lower: str, card: dict,
     # Panini sub-brand mismatch hard filter (sports only)
     # ===========================================================                         
                          
-    PANINI_BRANDS = {"prizm", "select", "optic", "mosaic", "chronicles",
-                     "contenders", "donruss", "prestige", "spectra", "flawless"}
     if not is_tcg:
         title_brands = PANINI_BRANDS & set(tokenize(title_lower))
         db_brands    = PANINI_BRANDS & set(tokenize(combined_db))
         if title_brands - db_brands:
+            return -1.0
+        title_topps = TOPPS_BRANDS & set(tokenize(title_lower))
+        db_topps    = TOPPS_BRANDS & set(tokenize(combined_db))
+        if title_topps - db_topps:
             return -1.0
 
     # ===========================================================
@@ -758,18 +787,22 @@ def score_card_match(title_lower: str, card: dict,
         title_tokens = set(tokenize(title_lower))
         if title_tokens & STRONG_NON_BASE:
             score -= 40
-        canonical      = (card.get("canonical_name") or "").lower()
-        set_name_lower = set_name.lower()
-        canonical_extra = [
-            t for t in tokenize(canonical)
-            if t not in tokenize(set_name_lower)
-            and t not in SET_NOISE_WORDS
-            and len(t) >= 4
-        ]
-        if canonical_extra:
-            missing = [t for t in canonical_extra if t not in title_lower]
-            if missing and len(missing) / len(canonical_extra) >= 0.5:
-                return -1.0
+
+    # Canonical sub-product check (all cards)
+    canonical          = (card.get("canonical_name") or "").lower()
+    set_name_lower     = set_name.lower()
+    player_name_lower  = (card.get("player_name") or "").lower()
+    canonical_extra = [
+        t for t in tokenize(canonical)
+        if t not in tokenize(set_name_lower)
+        and t not in tokenize(player_name_lower)
+        and t not in SET_NOISE_WORDS
+        and len(t) >= 4
+    ]
+    if canonical_extra:
+        missing = [t for t in canonical_extra if t not in title_lower]
+        if missing and len(missing) / len(canonical_extra) >= 0.5:
+            return -1.0
 
     # Card number bonus — reward matches, no penalty for absence
     if not is_tcg and not is_ygo and db_card_num and ebay_card_num:
