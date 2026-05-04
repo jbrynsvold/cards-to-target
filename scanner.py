@@ -543,7 +543,7 @@ def load_gradeable_cards(sport: str, min_year: int = None) -> list:
     while True:
         result = supabase.table("mv_grade_premiums") \
             .select("player_name, set_name, set_year, card_number, variation, "
-                    "canonical_name, is_rookie, raw_price, psa9_price, psa10_price, "
+                    "canonical_name, insert_set, is_rookie, raw_price, psa9_price, psa10_price, "
                     "grading_score, raw_to_psa9_mult, psa10_sale_count_30d, "
                     "raw_sale_count_30d, sport") \
             .eq("sport", sport) \
@@ -788,21 +788,14 @@ def score_card_match(title_lower: str, card: dict,
         if title_tokens & STRONG_NON_BASE:
             score -= 40
 
-    # Canonical sub-product check (all cards)
-    canonical          = (card.get("canonical_name") or "").lower()
-    set_name_lower     = set_name.lower()
-    player_name_lower  = (card.get("player_name") or "").lower()
-    canonical_extra = [
-        t for t in tokenize(canonical)
-        if t not in tokenize(set_name_lower)
-        and t not in tokenize(player_name_lower)
-        and t not in SET_NOISE_WORDS
-        and len(t) >= 4
-    ]
-    if canonical_extra:
-        missing = [t for t in canonical_extra if t not in title_lower]
-        if missing and len(missing) / len(canonical_extra) >= 0.5:
-            return -1.0
+    # --- Insert set hard filter ---
+    insert = (card.get("insert_set") or "").strip()
+    if insert:
+        insert_tokens = [t for t in tokenize(insert) if t not in SET_NOISE_WORDS and len(t) >= 4]
+        if insert_tokens:
+            missing = [t for t in insert_tokens if t not in title_lower]
+            if missing and len(missing) / len(insert_tokens) >= 0.5:
+                return -1.0
 
     # Card number bonus — reward matches, no penalty for absence
     if not is_tcg and not is_ygo and db_card_num and ebay_card_num:
