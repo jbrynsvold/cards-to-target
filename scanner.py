@@ -130,6 +130,19 @@ STRONG_NON_BASE = {
     "reverse", "fullart", "altart", "promo", "kaboom", "horizontal",
 }
 
+VARIATION_COLORS = {
+    "black", "white", "red", "blue", "green", "yellow", "orange", "purple",
+    "pink", "brown", "grey", "gray", "gold", "silver", "bronze",
+    "aqua", "teal", "cyan", "magenta", "indigo", "violet", "maroon",
+    "platinum", "copper", "ruby", "sapphire", "emerald", "onyx",
+}
+
+PARALLEL_TYPES = {
+    "wave", "pulsar", "refractor", "prizm", "holo", "foil",
+    "atomic", "laser", "cracked", "shimmer", "disco", "mosaic",
+    "scope", "ice", "lava", "choice", "tiger", "snake",
+}
+
 POKEMON_GENERATION_TOKENS = {
     "scarlet", "violet", "sword", "shield", "sun", "moon",
     "black", "white", "diamond", "pearl", "heartgold", "soulsilver",
@@ -765,11 +778,30 @@ def score_card_match(title_lower: str, card: dict,
         score += 15
 
 
-    # ===========================================================
+# ===========================================================
     # Variation matching
     # ===========================================================
     if not is_base:
         v_tokens = variation_tokens(variation)
+
+        # --- Color hard filter ---
+        db_colors    = VARIATION_COLORS & set(v_tokens)
+        title_colors = VARIATION_COLORS & set(tokenize(title_lower))
+        if db_colors:
+            if not (db_colors & title_colors):
+                return -1.0
+            if title_colors - db_colors:
+                return -1.0
+
+        # --- Parallel type hard filter ---
+        db_parallels    = PARALLEL_TYPES & set(v_tokens)
+        title_parallels = PARALLEL_TYPES & set(tokenize(title_lower))
+        if db_parallels:
+            if not (db_parallels & title_parallels):
+                return -1.0
+            if title_parallels - db_parallels:
+                return -1.0
+
         if v_tokens:
             found_v = [t for t in v_tokens if t in title_lower]
             ratio_v = len(found_v) / len(v_tokens)
@@ -778,6 +810,7 @@ def score_card_match(title_lower: str, card: dict,
             score += ratio_v * 60
             if len(found_v) == len(v_tokens):
                 score += 20
+            score += len(v_tokens) * 3  # specificity bonus — more tokens = more specific
         else:
             if variation.lower() in title_lower:
                 score += 20
