@@ -501,7 +501,8 @@ def load_player_index(sport: str):
     _word_to_players[sport]     = word_map
     _cleaned_to_original[sport] = cleaned_map
     _player_index_loaded.add(sport)
-    log.info(f"{sport} ({schema}): loaded {len(cleaned_map)} names, {len(word_map)} index words")
+    log.info(f"{sport} ({'tcg' if is_tcg else 'sports'}): loaded {len(cleaned_map)} names, {len(word_map)} index words")
+
 
 def get_candidate_players(title: str, sport: str) -> list:
     title_lower   = normalize_title(title).lower()
