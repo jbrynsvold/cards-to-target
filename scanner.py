@@ -474,15 +474,13 @@ def load_player_index(sport: str):
     if sport in _player_index_loaded:
         return
 
-    # ── CHANGED: route to correct schema based on sport type ──────────────────
     is_tcg     = sport in TCG_SPORTS
-    schema     = "tcg" if is_tcg else "sports"
     name_col   = "character_name" if is_tcg else "player_name"
     filter_col = "title" if is_tcg else "sport"
-    # ──────────────────────────────────────────────────────────────────────────
+    table_name = "tcg_character_index" if is_tcg else "player_name_index"
 
-    log.info(f"Loading {sport} names from {schema}.player_name_index...")
-    result = supabase.table(f"{schema}.player_name_index") \
+    log.info(f"Loading {sport} names from {table_name}...")
+    result = supabase.table(table_name) \
         .select(name_col) \
         .eq(filter_col, sport) \
         .limit(50000) \
