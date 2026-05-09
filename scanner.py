@@ -8,7 +8,7 @@ import schedule
 import requests
 from datetime import datetime, timezone, timedelta
 from dotenv import load_dotenv
-from supabase import create_client, Client
+from supabase import create_client
 from rapidfuzz import fuzz
 
 load_dotenv()
@@ -408,11 +408,6 @@ def normalize_title(title: str) -> str:
     return result
 
 def expand_pokemon_set_aliases(title_lower: str, set_name: str) -> str:
-    """
-    If the DB set name contains a known alias key, check if the seller used
-    an alias in the title and inject the canonical key words so token matching
-    succeeds. Also works in reverse — canonical words in title, inject aliases.
-    """
     set_name_lower = set_name.lower()
     for key, aliases in POKEMON_SET_ALIASES.items():
         if key in set_name_lower:
@@ -445,11 +440,9 @@ def set_tokens(set_name: str, is_tcg: bool = False) -> tuple:
         gen_tokens    = [t for t in non_year if t in POKEMON_GENERATION_TOKENS]
         unique_tokens = [t for t in non_year if t not in POKEMON_GENERATION_TOKENS]
         if unique_tokens:
-            # Sub-set — unique name tokens required, generation and year optional
             required = unique_tokens
             optional = gen_tokens + year_tokens
         else:
-            # Base set — generation tokens are all we have, require them
             required = gen_tokens
             optional = year_tokens
     else:
@@ -466,6 +459,13 @@ def variation_tokens(variation: str) -> list:
 # Player name index
 # ===========================================================================
 
+# TCG sport names — used for schema routing
+TCG_SPORTS = {
+    'Pokemon', 'Yu-Gi-Oh', 'One Piece', 'Magic: The Gathering',
+    'Disney Lorcana', 'Dragon Ball Super', 'Digimon', 'Gundam TCG',
+    'Other TCG', 'Weiss Schwarz',
+}
+
 _word_to_players:     dict = {}
 _cleaned_to_original: dict = {}
 _player_index_loaded: set  = set()
@@ -473,13 +473,21 @@ _player_index_loaded: set  = set()
 def load_player_index(sport: str):
     if sport in _player_index_loaded:
         return
-    log.info(f"Loading {sport} player names...")
-    result = supabase.table("player_name_index") \
-        .select("player_name") \
-        .eq("sport", sport) \
+
+    # ── CHANGED: route to correct schema based on sport type ──────────────────
+    is_tcg     = sport in TCG_SPORTS
+    schema     = "tcg" if is_tcg else "sports"
+    name_col   = "character_name" if is_tcg else "player_name"
+    filter_col = "title" if is_tcg else "sport"
+    # ──────────────────────────────────────────────────────────────────────────
+
+    log.info(f"Loading {sport} names from {schema}.player_name_index...")
+    result = supabase.table(f"{schema}.player_name_index") \
+        .select(name_col) \
+        .eq(filter_col, sport) \
         .limit(50000) \
         .execute()
-    all_names = [r["player_name"] for r in (result.data or []) if r.get("player_name")]
+    all_names = [r[name_col] for r in (result.data or []) if r.get(name_col)]
     word_map    = {}
     cleaned_map = {}
     seen        = set()
@@ -495,11 +503,11 @@ def load_player_index(sport: str):
     _word_to_players[sport]     = word_map
     _cleaned_to_original[sport] = cleaned_map
     _player_index_loaded.add(sport)
-    log.info(f"{sport}: loaded {len(cleaned_map)} players, {len(word_map)} index words")
+    log.info(f"{sport} ({schema}): loaded {len(cleaned_map)} names, {len(word_map)} index words")
 
 def get_candidate_players(title: str, sport: str) -> list:
-    title_lower = normalize_title(title).lower()
-    word_map    = _word_to_players.get(sport, {})
+    title_lower   = normalize_title(title).lower()
+    word_map      = _word_to_players.get(sport, {})
     title_words   = [w for w in re.split(r'\W+', title_lower) if len(w) >= MIN_WORD_LEN]
     candidate_set = set()
     for word in title_words:
@@ -524,7 +532,7 @@ def get_candidate_players(title: str, sport: str) -> list:
 # Supabase
 # ===========================================================================
 
-supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
+supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 # ===========================================================================
 # Load gradeable cards
@@ -628,7 +636,7 @@ def extract_ygo_set_code(title: str) -> str | None:
 def build_card_debug(card: dict, title_lower: str, ebay_year, ebay_year2) -> str:
     set_name_norm = normalize_title(card.get("set_name") or "")
     card_sport    = card.get("sport", "")
-    card_is_tcg   = card_sport in {"Pokemon", "Yu-Gi-Oh", "Other TCG", "Non-Sport Vintage"}
+    card_is_tcg   = card_sport in TCG_SPORTS
     req, opt      = set_tokens(set_name_norm, is_tcg=card_is_tcg)
     found_req     = [t for t in req if t in title_lower]
     missing_req   = [t for t in req if t not in title_lower]
@@ -650,7 +658,7 @@ def score_card_match(title_lower: str, card: dict,
     variation   = (card.get("variation") or "").strip()
     is_base     = variation.lower() in BASE_VARIATIONS
     sport       = card.get("sport", "")
-    is_tcg      = sport in {"Pokemon", "Yu-Gi-Oh", "Other TCG", "Non-Sport Vintage"}
+    is_tcg      = sport in TCG_SPORTS
     is_ygo      = sport == "Yu-Gi-Oh"
 
     # ===========================================================
@@ -1045,13 +1053,11 @@ def process_items(items: list, listing_type: str, cards: list,
         if not matched_card or best_score < min_score:
             no_card += 1
             debug_line = best_debug if best_debug else reject_debug
-            # If score is exactly 0 with many cards checked, none passed even basic set token matching
             if best_score == 0 and len(player_cards) > 5:
-                # Sample the first card to show what tokens are expected
                 sample = player_cards[0]
                 sn = normalize_title(sample.get("set_name") or "")
                 cs = sample.get("sport", "")
-                tcg = cs in {"Pokemon", "Yu-Gi-Oh", "Other TCG", "Non-Sport Vintage"}
+                tcg = cs in TCG_SPORTS
                 req, _ = set_tokens(sn, is_tcg=tcg)
                 eff = expand_pokemon_set_aliases(title_lower, sn) if cs == "Pokemon" else title_lower
                 found = [t for t in req if t in eff]
