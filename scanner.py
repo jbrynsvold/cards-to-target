@@ -552,7 +552,7 @@ def load_gradeable_cards(sport: str, min_year: int = None) -> list:
             .select("player_name, set_name, set_year, card_number, variation, "
                     "canonical_name, insert_set, is_rookie, raw_price, psa9_price, psa10_price, "
                     "grading_score, raw_to_psa9_mult, psa10_sale_count_30d, "
-                    "raw_sale_count_30d, sport") \
+                    "raw_sale_count_30d, sport, avg_price_3d, sale_count_3d") \
             .eq("sport", sport) \
             .not_.is_("raw_price", "null") \
             .not_.is_("psa10_price", "null") \
@@ -570,7 +570,12 @@ def load_gradeable_cards(sport: str, min_year: int = None) -> list:
     filtered = []
     for c in all_cards:
         try:
-            raw   = float(c["raw_price"])
+            raw_30d    = float(c["raw_price"])
+            raw_3d     = float(c.get("avg_price_3d") or 0)
+            raw_3d_cnt = int(c.get("sale_count_3d") or 0)
+            raw        = raw_3d if (raw_3d > 0 and raw_3d_cnt >= 3) else raw_30d
+            c["resolved_raw"]   = raw
+            c["resolved_label"] = "3d avg" if (raw_3d > 0 and raw_3d_cnt >= 3) else "30d avg"
             psa10 = float(c["psa10_price"])
             roi   = psa10 / (raw + GRADING_COST)
             net   = psa10 - raw - GRADING_COST
@@ -886,7 +891,7 @@ def post_discord_alert(card: dict, item: dict, listing_type: str,
         log.warning("No Discord webhook configured")
         return
 
-    raw_price  = float(card["raw_price"])
+    raw_price  = float(card.get("resolved_raw") or card["raw_price"])
     psa10      = float(card["psa10_price"])
     psa9       = float(card.get("psa9_price") or 0)
     grade_cost = 27.99
@@ -916,7 +921,7 @@ def post_discord_alert(card: dict, item: dict, listing_type: str,
         set_display = f"{set_year_str} {set_name_str}".strip()
 
     description = (
-        f"**eBay:** {fmt(ebay_price)}  ·  **GIGA Median:** {fmt(raw_price)}\n"
+        f"**eBay:** {fmt(ebay_price)}  ·  **GIGA Median:** {fmt(raw_price)} _({card.get('resolved_label', '30d avg')})_\n"
         f"**PSA 9:** {fmt(psa9)}  ·  **PSA 10:** {fmt(psa10)}\n"
         f"**Est. Net Profit:** {fmt(net_profit)} "
         f"_(after {fmt(grade_cost)} grading + {fmt(ebay_fees)} eBay fees)_"
