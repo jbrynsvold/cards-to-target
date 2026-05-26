@@ -21,7 +21,8 @@ EBAY_CLIENT_ID     = os.getenv("EBAY_CLIENT_ID")
 EBAY_CLIENT_SECRET = os.getenv("EBAY_CLIENT_SECRET")
 SUPABASE_URL       = os.getenv("SUPABASE_URL")
 SUPABASE_KEY       = os.getenv("SUPABASE_KEY")
-DISCORD_WEBHOOK    = os.getenv("DISCORD_WEBHOOK_GRADE_ALERTS")
+DISCORD_WEBHOOK_SPORTS = os.getenv("DISCORD_WEBHOOK_GRADE_ALERTS_SPORTS")
+DISCORD_WEBHOOK_TCG    = os.getenv("DISCORD_WEBHOOK_GRADE_ALERTS_TCG")
 
 EBAY_TOKEN_URL  = "https://api.ebay.com/identity/v1/oauth2/token"
 EBAY_SEARCH_URL = "https://api.ebay.com/buy/browse/v1/item_summary/search"
@@ -886,8 +887,9 @@ def format_time_remaining(end_time_str: str) -> str:
         return ""
 
 def post_discord_alert(card: dict, item: dict, listing_type: str,
-                       ebay_price: float, category_config: dict):
-    if not DISCORD_WEBHOOK:
+                       ebay_price: float, category_config: dict,
+                       webhook_url: str = None):
+    if not webhook_url:
         log.warning("No Discord webhook configured")
         return
 
@@ -946,7 +948,7 @@ def post_discord_alert(card: dict, item: dict, listing_type: str,
         embed["thumbnail"] = {"url": item["image"]["imageUrl"]}
 
     resp = requests.post(
-        DISCORD_WEBHOOK,
+        webhook_url,
         json={"embeds": [embed]},
         headers={"Content-Type": "application/json"},
     )
@@ -966,6 +968,9 @@ def process_items(items: list, listing_type: str, cards: list,
     is_ygo        = sport == "Yu-Gi-Oh"
     min_score     = MIN_MATCH_SCORE_TCG if is_tcg else MIN_MATCH_SCORE
     section_start = time.time()
+
+    # Route to the correct Discord channel
+    webhook_url = DISCORD_WEBHOOK_TCG if is_tcg else DISCORD_WEBHOOK_SPORTS
 
     log_elapsed(f"Processing {len(items)} {listing_type} items...")
 
@@ -1140,7 +1145,7 @@ def process_items(items: list, listing_type: str, cards: list,
         )
 
         record_alert(url)
-        post_discord_alert(matched_card, item, listing_type, price, category_config)
+        post_discord_alert(matched_card, item, listing_type, price, category_config, webhook_url)
         alerts_sent += 1
         time.sleep(0.5)
 
