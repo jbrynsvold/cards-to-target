@@ -79,6 +79,17 @@ JAPANESE_SET_CODE_RE = re.compile(
     r'\b(sv\d+[a-zA-Z]*|SV-P|SV[0-9]+[a-zA-Z]|s\d+[a-zA-Z]|SM\d+|XY\d+|BW\d+)\b'
 )
 
+# Condition filter — applied universally to all sports and TCG
+# \b word boundaries prevent partial matches (e.g. "Felipe", "Ralph")
+# HP requires no adjacent digit to avoid filtering "200 HP" Pokemon stat lines
+# NM/LP combos (e.g. "NM/LP", "NM-LP") are allowed through downstream
+CONDITION_FILTER_RE = re.compile(
+    r'\b(lp|mp|dmg|lightly\s+played|moderately\s+played|heavily\s+played|'
+    r'damaged|poor\s+condition|played\s+condition)\b'
+    r'|(?<!\d\s)(?<!\d)\bHP\b(?!\s*\d)',
+    re.IGNORECASE
+)
+
 # Yu-Gi-Oh set code pattern e.g. LOB-005, MRD-126, RA01-EN008
 YGO_SET_CODE_RE = re.compile(
     r'\b([A-Z]{2,6}\d*-[A-Z]{0,2}\d{3})\b'
@@ -995,6 +1006,14 @@ def process_items(items: list, listing_type: str, cards: list,
         if any(kw in title_lower_excl for kw in EXCL_KEYWORDS):
             no_candidates += 1
             continue
+
+        # Universal condition filter
+        if CONDITION_FILTER_RE.search(title):
+            nm_lp = bool(re.search(r'\bnm[\s/\-]lp\b', title.lower()))
+            if not nm_lp:
+                log_elapsed(f"CONDITION_FILTER: {title}")
+                no_candidates += 1
+                continue
 
         # Japanese set code filter — Pokemon only, not YGO
         if is_tcg and not is_ygo and JAPANESE_SET_CODE_RE.search(title):
