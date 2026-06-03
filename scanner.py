@@ -941,11 +941,11 @@ def post_discord_alert(card: dict, item: dict, listing_type: str,
     description = (
         f"**eBay:** {fmt(ebay_price)}  ·  **GIGA Median:** {fmt(raw_price)} _({card.get('resolved_label', '30d avg')})_\n"
         f"**PSA 9:** {fmt(psa9)}  ·  **PSA 10:** {fmt(psa10)}\n"
-        f"**Est. Net (Value tier, ${GRADING_COST:.2f} — when reopened):** {fmt(net_profit_value)} "
+        f"**Est. Net (after reopening):** {fmt(net_profit_value)} "
         f"_(after {fmt(GRADING_COST)} grading + {fmt(ebay_fees)} eBay fees)_\n"
-        f"**Est. Net (Regular, ${GRADING_COST_NOW:.2f} — available now):** {fmt(net_profit_now)} "
+        f"**Est. Net (submit now):** {fmt(net_profit_now)} "
         f"_(after {fmt(GRADING_COST_NOW)} grading + {fmt(ebay_fees)} eBay fees)_\n"
-        f"⚠️ PSA Value tiers paused June 2 — Regular (${GRADING_COST_NOW:.2f}, ~25 bus. days) is cheapest open tier"
+        f"⚠️ PSA Value tiers paused — $79.99 tier is currently cheapest available"
         f"{time_remaining_str}"
         f"{hard_grade_warning}"
     )
