@@ -34,7 +34,11 @@ MAX_ROI_MULTIPLE    = 500
 MIN_NET_PROFIT      = 20
 MIN_RAW_SALES_30D   = 3
 MIN_PSA10_SALES     = 1
-GRADING_COST        = 28
+# PSA Value tiers paused June 2, 2026. GRADING_COST reflects the cheapest
+# no-membership Value tier ($32.99) for future-planning purposes. Alerts
+# also show Regular tier profit ($79.99) for anyone submitting today.
+GRADING_COST        = 32.99
+GRADING_COST_NOW    = 79.99   # PSA Regular — cheapest open tier as of June 2, 2026
 MIN_PROFIT          = 50
 MIN_MATCH_SCORE     = 65
 MIN_MATCH_SCORE_TCG = 55  # slightly lower for TCG since set name matching is looser
@@ -722,8 +726,7 @@ def score_card_match(title_lower: str, card: dict,
 
     # ===========================================================
     # Panini sub-brand mismatch hard filter (sports only)
-    # ===========================================================                         
-                         
+    # ===========================================================
     if not is_tcg:
         title_brands = PANINI_BRANDS & set(tokenize(title_lower))
         db_brands    = PANINI_BRANDS & set(tokenize(combined_db))
@@ -787,7 +790,6 @@ def score_card_match(title_lower: str, card: dict,
     # Year bonus for TCG (not hard filter)
     if is_tcg and set_year and (preferred_year == set_year or ebay_year == set_year):
         score += 15
-
 
     # ===========================================================
     # Variation matching
@@ -907,9 +909,12 @@ def post_discord_alert(card: dict, item: dict, listing_type: str,
     raw_price  = float(card.get("resolved_raw") or card["raw_price"])
     psa10      = float(card["psa10_price"])
     psa9       = float(card.get("psa9_price") or 0)
-    grade_cost = 27.99
     ebay_fees  = round(psa10 * EBAY_FEE_PCT, 2)
-    net_profit = psa10 - ebay_price - grade_cost - ebay_fees
+
+    # Profit at Value tier ($32.99) — for when PSA Value tiers reopen
+    net_profit_value = psa10 - ebay_price - GRADING_COST - ebay_fees
+    # Profit at Regular tier ($79.99) — cheapest open tier as of June 2, 2026
+    net_profit_now   = psa10 - ebay_price - GRADING_COST_NOW - ebay_fees
 
     psa9_mult  = float(card.get("raw_to_psa9_mult") or 0)
     type_label = "🏷️ Buy It Now" if listing_type == "bin" else "⏱️ Auction"
@@ -936,8 +941,11 @@ def post_discord_alert(card: dict, item: dict, listing_type: str,
     description = (
         f"**eBay:** {fmt(ebay_price)}  ·  **GIGA Median:** {fmt(raw_price)} _({card.get('resolved_label', '30d avg')})_\n"
         f"**PSA 9:** {fmt(psa9)}  ·  **PSA 10:** {fmt(psa10)}\n"
-        f"**Est. Net Profit:** {fmt(net_profit)} "
-        f"_(after {fmt(grade_cost)} grading + {fmt(ebay_fees)} eBay fees)_"
+        f"**Est. Net (Value tier, ${GRADING_COST:.2f} — when reopened):** {fmt(net_profit_value)} "
+        f"_(after {fmt(GRADING_COST)} grading + {fmt(ebay_fees)} eBay fees)_\n"
+        f"**Est. Net (Regular, ${GRADING_COST_NOW:.2f} — available now):** {fmt(net_profit_now)} "
+        f"_(after {fmt(GRADING_COST_NOW)} grading + {fmt(ebay_fees)} eBay fees)_\n"
+        f"⚠️ PSA Value tiers paused June 2 — Regular (${GRADING_COST_NOW:.2f}, ~25 bus. days) is cheapest open tier"
         f"{time_remaining_str}"
         f"{hard_grade_warning}"
     )
@@ -952,7 +960,7 @@ def post_discord_alert(card: dict, item: dict, listing_type: str,
             {"name": "Listing Type", "value": type_label,                            "inline": True},
             {"name": "Card #",       "value": str(card.get("card_number") or "N/A"), "inline": True},
         ],
-        "footer": {"text": "Always verify condition before grading."},
+        "footer": {"text": "Grading costs as of mid 2026 — verify current availability before submitting. All graders experiencing extended turnaround times."},
     }
 
     if item.get("image", {}).get("imageUrl"):
@@ -1138,7 +1146,7 @@ def process_items(items: list, listing_type: str, cards: list,
             continue
 
         psa10      = float(matched_card.get("psa10_price") or 0)
-        net_profit = psa10 - price - 27.99 - round(psa10 * EBAY_FEE_PCT, 2)
+        net_profit = psa10 - price - GRADING_COST - round(psa10 * EBAY_FEE_PCT, 2)
         if net_profit < MIN_PROFIT:
             low_profit += 1
             log_elapsed(
@@ -1160,7 +1168,7 @@ def process_items(items: list, listing_type: str, cards: list,
         log_elapsed(
             f"DEAL: {matched_card['canonical_name']} | eBay: {fmt(price)} | "
             f"GIGA Median: {fmt(raw_median)} | PSA10: {fmt(psa10)} | "
-            f"Net Profit: {fmt(net_profit)}{time_remaining_log}"
+            f"Net Profit (Value tier): {fmt(net_profit)}{time_remaining_log}"
         )
 
         record_alert(url)
