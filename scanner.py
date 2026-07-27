@@ -61,7 +61,7 @@ EXCL = (
     ' -"complete a set" -"complete the set" -"take your pick"'
     ' -"buy more" -"free ship" -"flat s/h"'
     ' -PSA -BGS -SGC -CGC -graded'
-    ' -"cards!" -"jumbo"'
+    ' -"cards!" -"jumbo" -"reprint"'
 )
 
 EXCL_KEYWORDS = [
