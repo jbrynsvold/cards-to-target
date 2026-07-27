@@ -540,7 +540,7 @@ def get_candidate_players(title: str, sport: str) -> list:
         score   = fuzz.partial_ratio(cleaned, title_lower)
         if score >= 92:
             matches.append((original_name, score))
-    matches.sort(key=lambda x: -x[1])
+    matches.sort(key=lambda x: (-x[1], -len(x[0])))
     return [m[0] for m in matches]
 
 # ===========================================================================
@@ -553,11 +553,14 @@ supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 # Load gradeable cards
 # ===========================================================================
 
-_card_cache = {}
+_card_cache: dict = {}
+_card_cache_time: dict = {}
+CACHE_TTL_SECONDS = 6 * 3600  # 6 hours — underlying data only changes once daily (~10 AM CT rebuild)
 
 def load_gradeable_cards(sport: str, min_year: int = None) -> list:
     cache_key = f"{sport}:{min_year}"
-    if cache_key in _card_cache:
+    now = time.time()
+    if cache_key in _card_cache and (now - _card_cache_time.get(cache_key, 0)) < CACHE_TTL_SECONDS:
         return _card_cache[cache_key]
     log_elapsed(f"Loading gradeable cards for {sport}...")
     all_cards  = []
@@ -568,7 +571,7 @@ def load_gradeable_cards(sport: str, min_year: int = None) -> list:
             .select("player_name, set_name, set_year, card_number, variation, "
                     "canonical_name, insert_set, is_rookie, raw_price, psa9_price, psa10_price, "
                     "grading_score, raw_to_psa9_mult, psa10_sale_count_30d, "
-                    "raw_sale_count_30d, sport, avg_price_3d, sale_count_3d, avg_price_7d") \
+                    "raw_sale_count_30d, sport, avg_price_3d, sale_count_3d, avg_price_7d, sale_count_7d") \
             .eq("sport", sport) \
             .not_.is_("raw_price", "null") \
             .not_.is_("psa10_price", "null") \
@@ -609,6 +612,7 @@ def load_gradeable_cards(sport: str, min_year: int = None) -> list:
             continue
     log_elapsed(f"Loaded {len(all_cards)} cards, {len(filtered)} passed ROI filter for {sport}")
     _card_cache[cache_key] = filtered
+    _card_cache_time[cache_key] = now
     return filtered
 
 # ===========================================================================
@@ -1205,7 +1209,6 @@ def run_scan():
     log.info("=" * 60)
     log.info(f"Starting grading scan — {datetime.now(timezone.utc).isoformat()}")
     log.info("=" * 60)
-    _card_cache.clear()
     for cat_name, cat_config in CATEGORIES.items():
         sport = cat_config["sport"]
         log_elapsed(f"\n--- Scanning {cat_name} ---")
