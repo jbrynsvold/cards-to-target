@@ -76,7 +76,7 @@ EXCL_KEYWORDS = [
     "japanese", "chinese", "korean",
     "pick your player", "pick & choose", "pick from list",
     "fill your set", "build a lot", "set break",
-    "card pick", "singles", "jumbo",
+    "card pick", "singles", "jumbo", "reprint"
 ]
 
 JAPANESE_SET_CODE_RE = re.compile(
