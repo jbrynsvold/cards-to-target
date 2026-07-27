@@ -568,7 +568,7 @@ def load_gradeable_cards(sport: str, min_year: int = None) -> list:
             .select("player_name, set_name, set_year, card_number, variation, "
                     "canonical_name, insert_set, is_rookie, raw_price, psa9_price, psa10_price, "
                     "grading_score, raw_to_psa9_mult, psa10_sale_count_30d, "
-                    "raw_sale_count_30d, sport, avg_price_3d, sale_count_3d") \
+                    "raw_sale_count_30d, sport, avg_price_3d, sale_count_3d, avg_price_7d") \
             .eq("sport", sport) \
             .not_.is_("raw_price", "null") \
             .not_.is_("psa10_price", "null") \
@@ -589,9 +589,15 @@ def load_gradeable_cards(sport: str, min_year: int = None) -> list:
             raw_30d    = float(c["raw_price"])
             raw_3d     = float(c.get("avg_price_3d") or 0)
             raw_3d_cnt = int(c.get("sale_count_3d") or 0)
-            raw        = raw_3d if (raw_3d > 0 and raw_3d_cnt >= 3) else raw_30d
+            raw_7d     = float(c.get("avg_price_7d") or 0)
+            if raw_3d > 0 and raw_3d_cnt >= 3:
+                raw, label = raw_3d, "3d avg"
+            elif raw_7d > 0:
+                raw, label = raw_7d, "7d avg"
+            else:
+                raw, label = raw_30d, "30d avg"
             c["resolved_raw"]   = raw
-            c["resolved_label"] = "3d avg" if (raw_3d > 0 and raw_3d_cnt >= 3) else "30d avg"
+            c["resolved_label"] = label
             psa10 = float(c["psa10_price"])
             roi   = psa10 / (raw + GRADING_COST)
             net   = psa10 - raw - GRADING_COST
@@ -644,7 +650,9 @@ def parse_title_years(title: str):
             if (y1 >= 90 or y1 <= 26) and (y2 >= 90 or y2 <= 26):
                 ebay_year  = (1900 if y1 >= 90 else 2000) + y1
                 ebay_year2 = 2000 + y2
-    card_num_match = re.search(r'#\s*(\w+)', title)
+    # Widened to capture hyphenated card numbers (e.g. #BDC-45, #CRA-JJ),
+    # not just plain alphanumeric ones — previously the regex stopped at the hyphen.
+    card_num_match = re.search(r'#\s*([\w-]+)', title)
     ebay_card_num  = card_num_match.group(1).lstrip('0') if card_num_match else None
     return ebay_year, ebay_year2, ebay_card_num
 
@@ -1123,7 +1131,10 @@ def process_items(items: list, listing_type: str, cards: list,
             log_elapsed(f"PRICE_ZERO: {matched_card['canonical_name']} | no price on listing")
             continue
 
-        raw_median = float(matched_card["raw_price"])
+        # Use the resolved raw price (3d/7d/30d fallback), not the raw 30d
+        # field directly — this keeps the price-threshold gate consistent
+        # with what's actually shown as "GIGA Median" in the Discord embed.
+        raw_median = float(matched_card.get("resolved_raw") or matched_card["raw_price"])
         if raw_median <= 0:
             log_elapsed(f"NO_RAW_PRICE: {matched_card['canonical_name']} | raw_price is zero or null")
             continue
