@@ -61,7 +61,7 @@ EXCL = (
     ' -"complete a set" -"complete the set" -"take your pick"'
     ' -"buy more" -"free ship" -"flat s/h"'
     ' -PSA -BGS -SGC -CGC -graded'
-    ' -"cards!" -"jumbo" -"reprint"'
+    ' -"cards!" -"jumbo"'
 )
 
 EXCL_KEYWORDS = [
@@ -76,7 +76,7 @@ EXCL_KEYWORDS = [
     "japanese", "chinese", "korean",
     "pick your player", "pick & choose", "pick from list",
     "fill your set", "build a lot", "set break",
-    "card pick", "singles", "jumbo", "reprint"
+    "card pick", "singles", "jumbo",
 ]
 
 JAPANESE_SET_CODE_RE = re.compile(
@@ -737,6 +737,25 @@ def score_card_match(title_lower: str, card: dict,
         return -1.0
 
     # ===========================================================
+    # Non-Holo hard filter — a title explicitly saying "Non-Holo"/"Non Holo"
+    # must not match a DB card whose variation/set implies it IS holo.
+    # ===========================================================
+    title_is_non_holo = bool(re.search(r'\bnon[\s-]?holo\b', title_lower))
+    db_is_non_holo    = bool(re.search(r'\bnon[\s-]?holo\b', combined_db))
+    db_is_holo        = "holo" in combined_db and not db_is_non_holo
+    if title_is_non_holo and db_is_holo:
+        return -1.0
+
+    # ===========================================================
+    # Japanese/English hard filter — a Japanese-print DB card must not
+    # match an English-language listing (or vice versa).
+    # ===========================================================
+    title_is_japanese = "japanese" in title_lower
+    db_is_japanese    = "japanese" in combined_db or "japanese" in set_name.lower()
+    if title_is_japanese != db_is_japanese:
+        return -1.0
+
+    # ===========================================================
     # Panini sub-brand mismatch hard filter (sports only)
     # ===========================================================
     if not is_tcg:
@@ -824,7 +843,7 @@ def score_card_match(title_lower: str, card: dict,
     else:
         title_tokens = set(tokenize(title_lower))
         if title_tokens & STRONG_NON_BASE:
-            score -= 40
+            return -1.0
 
     # --- Insert set hard filter ---
     insert = (card.get("insert_set") or "").strip()
